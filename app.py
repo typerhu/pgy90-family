@@ -58,6 +58,11 @@ FOOD_ESTIMATES = {
     "沙拉": (45, 2, 3, 8, 1),
     "香蕉": (105, 1.3, 3, 27, 0.4),
     "蘋果": (95, 0.5, 4, 25, 0.3),
+    "小番茄": (3, 0.1, 0.1, 0.7, 0),
+    "小蕃茄": (3, 0.1, 0.1, 0.7, 0),
+    "番茄": (22, 1, 1.5, 4.8, 0.2),
+    "蕃茄": (22, 1, 1.5, 4.8, 0.2),
+    "藍莓": (1, 0, 0.1, 0.2, 0),
     "牛奶": (60, 3.2, 0, 5, 3.3),
     "優格": (95, 9, 0, 6, 4),
     "拿鐵": (180, 9, 0, 18, 7),
@@ -1036,10 +1041,13 @@ def quantity_multiplier(text: str) -> float:
 
 def item_multiplier(text: str, keyword: str) -> float:
     number_tokens = {"半": 0.5, "一": 1, "1": 1, "兩": 2, "二": 2, "2": 2, "三": 3, "3": 3}
-    pattern = rf"({'|'.join(number_tokens.keys())})\s*(份|碗|盤|個|顆|杯|片)?\s*{re.escape(keyword)}"
+    pattern = rf"(\d+(?:\.\d+)?|{'|'.join(number_tokens.keys())})\s*(份|碗|盤|個|顆|杯|片)?\s*{re.escape(keyword)}"
     match = re.search(pattern, text)
     if match:
-        return number_tokens[match.group(1)]
+        token = match.group(1)
+        if re.fullmatch(r"\d+(?:\.\d+)?", token):
+            return float(token)
+        return number_tokens[token]
     if keyword in {"飯", "麵", "麵包", "燕麥", "地瓜"}:
         return quantity_multiplier(text)
     return 1.0
