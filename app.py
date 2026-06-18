@@ -1210,40 +1210,44 @@ def daily_input_page(person_name: str) -> None:
             return fallback
         return existing[key]
 
-    with st.form("daily_log_form"):
-        st.markdown("#### 身體指標")
-        weight = st.number_input(
-            "體重 kg",
-            min_value=30.0,
-            max_value=180.0,
-            value=float(existing_value("weight_kg", 75.0)),
+    st.markdown("#### 身體指標")
+    weight = st.number_input(
+        "體重 kg",
+        min_value=30.0,
+        max_value=180.0,
+        value=float(existing_value("weight_kg", 75.0)),
+        step=0.1,
+        format="%.1f",
+        width=120,
+    )
+    body_fat = st.number_input(
+        "體脂 %",
+        min_value=3.0,
+        max_value=45.0,
+        value=float(existing_value("body_fat_percent", 15.0)),
+        step=0.1,
+        format="%.1f",
+        width=120,
+    )
+    existing_waist = existing_value("waist_cm", None)
+    waist_measured = st.checkbox(
+        "今天有量腰圍",
+        value=existing_waist is not None,
+        key=f"waist_measured_{person_name}_{selected_date.isoformat()}",
+    )
+    waist = None
+    if waist_measured:
+        waist = st.number_input(
+            "腰圍 cm",
+            min_value=50.0,
+            max_value=150.0,
+            value=float(existing_waist if existing_waist is not None else 82.0),
             step=0.1,
             format="%.1f",
             width=120,
         )
-        body_fat = st.number_input(
-            "體脂 %",
-            min_value=3.0,
-            max_value=45.0,
-            value=float(existing_value("body_fat_percent", 15.0)),
-            step=0.1,
-            format="%.1f",
-            width=120,
-        )
-        existing_waist = existing_value("waist_cm", None)
-        waist_measured = st.checkbox("今天有量腰圍", value=existing_waist is not None)
-        waist = None
-        if waist_measured:
-            waist = st.number_input(
-                "腰圍 cm",
-                min_value=50.0,
-                max_value=150.0,
-                value=float(existing_waist if existing_waist is not None else 82.0),
-                step=0.1,
-                format="%.1f",
-                width=120,
-            )
 
+    with st.form("daily_log_form"):
         st.markdown("#### 睡眠")
         current_sleep_hours, current_sleep_minutes = split_sleep_time(
             existing_value("sleep_hours", 7.0)
