@@ -1103,14 +1103,14 @@ def extract_response_text(response: dict) -> str:
     return "\n".join(parts).strip()
 
 
-def parse_meal_photo_result(raw_text: str) -> dict:
+def parse_meal_ai_result(raw_text: str, fallback_description: str) -> dict:
     cleaned = raw_text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     data = json.loads(cleaned)
     return {
-        "description": str(data.get("description") or "照片餐食"),
+        "description": str(data.get("description") or fallback_description),
         "meal_type": str(data.get("meal_type") or "點心"),
         "calories": int(round(float(data.get("calories") or 0))),
         "protein_g": round(float(data.get("protein_g") or 0), 1),
@@ -1120,6 +1120,70 @@ def parse_meal_photo_result(raw_text: str) -> dict:
         "confidence": str(data.get("confidence") or "低"),
         "matched": str(data.get("matched") or data.get("description") or "照片辨識"),
     }
+
+
+def request_openai_json(prompt: str, image_url: str | None = None) -> dict:
+    content = [{"type": "input_text", "text": prompt}]
+    if image_url:
+        content.append({"type": "input_image", "image_url": image_url, "detail": "low"})
+    request_body = {
+        "model": get_openai_model(),
+        "input": [{"role": "user", "content": content}],
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {get_openai_api_key()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def analyze_meal_text(description: str, meal_type_override: str) -> dict:
+    if not get_openai_api_key():
+        raise RuntimeError("尚未設定 OPENAI_API_KEY。")
+
+    local_now = datetime.now(APP_TIMEZONE)
+    default_meal_type = meal_type_by_local_time(local_now)
+    prompt = f"""
+你是家庭健康管理 App 的飲食紀錄助手。請根據使用者輸入的文字估算餐食營養。
+請只回傳 JSON，不要加 Markdown。欄位：
+description: 繁體中文餐食描述，保留重點份量
+meal_type: 早餐、午餐、晚餐、點心之一
+calories: 整數 kcal
+protein_g, fiber_g, carbs_g, fat_g: 數字
+confidence: 高、中、低之一
+matched: 簡短說明辨識到的主要食物或估算依據
+使用者輸入：{description}
+營養只是估算；份量不確定時請保守估算並降低 confidence。
+"""
+    if meal_type_override != "自動判斷":
+        prompt += f"\n使用者指定餐別為「{meal_type_override}」，meal_type 請使用這個值。"
+    else:
+        prompt += (
+            "\n使用者選擇自動判斷餐別。"
+            f"目前馬來西亞時間是 {local_now.strftime('%Y-%m-%d %H:%M')}，"
+            f"若文字沒有明確餐別，meal_type 請使用「{default_meal_type}」。"
+        )
+
+    try:
+        response_data = request_openai_json(prompt)
+    except urllib.error.HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"AI 文字估算失敗：{details}") from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"AI 文字估算連線失敗：{error.reason}") from error
+
+    result = parse_meal_ai_result(extract_response_text(response_data), description)
+    if meal_type_override != "自動判斷":
+        result["meal_type"] = meal_type_override
+    if result["meal_type"] not in MEAL_TYPES:
+        result["meal_type"] = default_meal_type
+    return result
 
 
 def analyze_meal_photo(image_bytes: bytes, mime_type: str, meal_type_override: str) -> dict:
@@ -1150,38 +1214,15 @@ matched: 簡短說明辨識到的主要食物；如果不確定，說明不確�
             f"若照片本身無法明確判斷餐別，meal_type 請使用「{default_meal_type}」。"
         )
 
-    request_body = {
-        "model": get_openai_model(),
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_image", "image_url": image_url, "detail": "low"},
-                ],
-            }
-        ],
-    }
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(request_body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            response_data = json.loads(response.read().decode("utf-8"))
+        response_data = request_openai_json(prompt, image_url)
     except urllib.error.HTTPError as error:
         details = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"照片辨識失敗：{details}") from error
     except urllib.error.URLError as error:
         raise RuntimeError(f"照片辨識連線失敗：{error.reason}") from error
 
-    result = parse_meal_photo_result(extract_response_text(response_data))
+    result = parse_meal_ai_result(extract_response_text(response_data), "照片餐食")
     if meal_type_override != "自動判斷":
         result["meal_type"] = meal_type_override
     if result["meal_type"] not in MEAL_TYPES:
@@ -1945,14 +1986,29 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             if not cleaned:
                 st.warning("先輸入一段飲食內容。")
             else:
-                estimate = estimate_nutrition(cleaned)
-                meal_type = detect_meal_type(cleaned) if meal_type_override == "自動判斷" else meal_type_override
+                used_ai_estimate = False
+                try:
+                    if get_openai_api_key():
+                        with st.spinner("正在用 AI 估算文字餐食..."):
+                            estimate = analyze_meal_text(cleaned, meal_type_override)
+                        used_ai_estimate = True
+                    else:
+                        raise RuntimeError("尚未設定 OPENAI_API_KEY。")
+                except (RuntimeError, json.JSONDecodeError) as error:
+                    estimate = estimate_nutrition(cleaned)
+                    estimate["description"] = cleaned
+                    estimate["meal_type"] = (
+                        detect_meal_type(cleaned)
+                        if meal_type_override == "自動判斷"
+                        else meal_type_override
+                    )
+                    st.warning(f"AI 估算未使用，已改用本機規則估算。原因：{error}")
                 save_meal_log(
                     {
                         "person_name": person_name,
                         "log_date": selected_date.isoformat(),
-                        "meal_type": meal_type,
-                        "description": cleaned,
+                        "meal_type": estimate["meal_type"],
+                        "description": estimate["description"],
                         "calories": estimate["calories"],
                         "protein_g": estimate["protein_g"],
                         "fiber_g": estimate["fiber_g"],
@@ -1964,7 +2020,8 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 st.success(
                     "已加入："
                     f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
-                    f"纖維 {estimate['fiber_g']} g。辨識：{estimate['matched']}。"
+                    f"纖維 {estimate['fiber_g']} g。"
+                    f"{'AI ' if used_ai_estimate else ''}辨識：{estimate['matched']}。"
                 )
                 st.rerun()
 
