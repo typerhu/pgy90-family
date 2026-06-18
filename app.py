@@ -76,6 +76,12 @@ MEAL_KEYWORDS = {
 }
 
 MEAL_TYPES = ["早餐", "午餐", "晚餐", "點心"]
+RESERVED_SECRET_NAMES = {
+    "APP_PASSWORD",
+    "INVITE_CODE",
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+}
 
 DAILY_LOG_MIGRATIONS = {
     "breakfast_category": "TEXT",
@@ -127,7 +133,11 @@ def get_user_passwords() -> dict[str, str]:
         users = {}
     if not users:
         return {}
-    return {str(username): str(password) for username, password in dict(users).items()}
+    return {
+        str(username): str(password)
+        for username, password in dict(users).items()
+        if str(username) not in RESERVED_SECRET_NAMES
+    }
 
 
 def get_admin_passwords() -> dict[str, str]:
@@ -137,7 +147,11 @@ def get_admin_passwords() -> dict[str, str]:
         admins = {}
     if not admins:
         return {}
-    return {str(username): str(password) for username, password in dict(admins).items()}
+    return {
+        str(username): str(password)
+        for username, password in dict(admins).items()
+        if str(username) not in RESERVED_SECRET_NAMES
+    }
 
 
 def get_openai_api_key() -> str:
