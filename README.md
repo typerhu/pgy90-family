@@ -65,35 +65,40 @@ http://192.168.x.x:8501
 
 手機請輸入終端機顯示的網址。不要在手機輸入 `127.0.0.1:8501`，因為那代表手機自己，不是你的 Mac。
 
-## 登入密碼
+## 登入帳號
 
-App 會從 Streamlit Secrets 讀取登入密碼。部署到 Streamlit Cloud 後，到 app 的 Settings > Secrets 加上：
+App 會從 Streamlit Secrets 讀取家人帳號。部署到 Streamlit Cloud 後，到 app 的 Settings > Secrets 加上：
 
 ```toml
-APP_PASSWORD = "換成你的密碼"
+[users]
+爸爸 = "爸爸的密碼"
+媽媽 = "媽媽的密碼"
+孩子 = "孩子的密碼"
 ```
 
-本機測試時也可以用環境變數：
+每個人登入後只能看到自己的資料。帳號名稱會直接成為該使用者的記錄名稱。
+
+如果只是本機測試，也可以暫時使用共用密碼：
 
 ```bash
 APP_PASSWORD="換成你的密碼" streamlit run app.py
 ```
 
-如果沒有設定 `APP_PASSWORD`，App 會停止在設定提醒頁，不會顯示健康資料。
+如果沒有設定 `[users]` 或 `APP_PASSWORD`，App 會停止在設定提醒頁，不會顯示健康資料。
 
-## 部署家人試用版
+## 部署家人版
 
-這個版本建議部署成獨立 Streamlit app，並選擇 `family-trial` branch。
+這個版本建議部署成獨立 Streamlit app。
 
 Streamlit Cloud 新增 app 時設定：
 
 ```text
-Repository: typerhu/PGY90
-Branch: family-trial
+Repository: typerhu/pgy90-family
+Branch: main
 Main file path: app.py
 ```
 
-部署後，請設定新的家人版 `APP_PASSWORD`，不要沿用個人版密碼。
+部署後，請設定家人帳號密碼，不要沿用個人版密碼。
 
 ## 資料庫
 
@@ -108,8 +113,7 @@ data/health.db
 ## 使用建議
 
 - 每天記錄即可，不需要精準計算熱量
-- 第一次登入後先在側邊欄新增具名使用者，例如「爸爸」「媽媽」或孩子名字
-- 不建議共用「我」作為使用者名稱，避免多個人的資料混在一起
+- 每個人用自己的帳號登入，不需要再手動選擇使用者
 - 腰圍不需要每天量，有測量時再勾選並填寫即可
 - 每餐飲食統一到「AI 飲食教練」記錄；「每日輸入」只保留當日飲食總評
 - 運動可以照 Apple Watch 填入運動分鐘、平均心率、最高心率、活動熱量與距離

@@ -101,27 +101,54 @@ def get_app_password() -> str:
     return os.environ.get("APP_PASSWORD", "")
 
 
-def require_login() -> bool:
+def get_user_passwords() -> dict[str, str]:
+    try:
+        users = st.secrets.get("users", {})
+    except Exception:
+        users = {}
+    if not users:
+        return {}
+    return {str(username): str(password) for username, password in dict(users).items()}
+
+
+def require_login() -> str | None:
+    user_passwords = get_user_passwords()
     password = get_app_password()
-    if not password:
-        st.error("尚未設定登入密碼。請先在 Streamlit Secrets 加上 APP_PASSWORD。")
+    if not user_passwords and not password:
+        st.error("尚未設定登入密碼。請先在 Streamlit Secrets 加上 [users] 或 APP_PASSWORD。")
         st.stop()
 
     if st.session_state.get("authenticated"):
         with st.sidebar:
+            current_user = st.session_state.get("authenticated_person")
+            if current_user:
+                st.markdown(f"### {current_user}")
             if st.button("登出", use_container_width=True):
                 st.session_state["authenticated"] = False
+                st.session_state.pop("authenticated_person", None)
                 st.rerun()
-        return True
+        return st.session_state.get("authenticated_person")
 
-    st.title("個人健康管理")
+    st.title("家庭健康管理")
     st.caption("請先登入。")
     with st.form("login_form"):
+        selected_user = None
+        if user_passwords:
+            selected_user = st.selectbox("使用者", list(user_passwords.keys()))
         entered_password = st.text_input("密碼", type="password")
         submitted = st.form_submit_button("登入", use_container_width=True)
 
     if submitted:
-        if hmac.compare_digest(entered_password, password):
+        if user_passwords:
+            expected_password = user_passwords.get(selected_user or "", "")
+            if hmac.compare_digest(entered_password, expected_password):
+                st.session_state["authenticated"] = True
+                st.session_state["authenticated_person"] = selected_user
+                add_person(selected_user or "")
+                st.rerun()
+            else:
+                st.error("使用者或密碼不正確。")
+        elif hmac.compare_digest(entered_password, password):
             st.session_state["authenticated"] = True
             st.rerun()
         else:
@@ -1539,9 +1566,13 @@ def person_selector() -> str:
 def app() -> None:
     st.set_page_config(page_title="個人健康管理", layout="centered")
     apply_ui_style()
-    require_login()
+    authenticated_person = require_login()
     init_db()
-    selected_person = person_selector()
+    if authenticated_person:
+        add_person(authenticated_person)
+        selected_person = authenticated_person
+    else:
+        selected_person = person_selector()
 
     st.title("家庭健康管理")
     st.caption(f"目前使用者：{selected_person}")
