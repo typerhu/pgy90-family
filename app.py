@@ -218,9 +218,22 @@ def user_overview() -> pd.DataFrame:
                 FROM weekly_reports
                 GROUP BY person_name
             ) w ON w.person_name = p.person_name
+            LEFT JOIN (
+                SELECT person_name, COUNT(*) AS profile_count
+                FROM coach_profiles
+                GROUP BY person_name
+            ) c ON c.person_name = p.person_name
             LEFT JOIN app_users u ON u.person_name = p.person_name
+            WHERE NOT (
+                p.person_name = ?
+                AND COALESCE(d.daily_count, 0) = 0
+                AND COALESCE(m.meal_count, 0) = 0
+                AND COALESCE(w.weekly_count, 0) = 0
+                AND COALESCE(c.profile_count, 0) = 0
+            )
             ORDER BY p.created_at, p.person_name
-            """
+            """,
+            (DEFAULT_PERSON,),
         ).fetchall()
     df = pd.DataFrame([dict(row) for row in rows])
     if not df.empty and "created_at" in df:
