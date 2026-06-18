@@ -9,6 +9,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -18,6 +19,8 @@ APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
 DB_PATH = DATA_DIR / "health.db"
 DEFAULT_PERSON = "我"
+APP_TIMEZONE = ZoneInfo("Asia/Kuching")
+UTC_TIMEZONE = ZoneInfo("UTC")
 
 PROFILE = {
     "height_cm": 181,
@@ -219,7 +222,23 @@ def user_overview() -> pd.DataFrame:
             ORDER BY p.created_at, p.person_name
             """
         ).fetchall()
-    return pd.DataFrame([dict(row) for row in rows])
+    df = pd.DataFrame([dict(row) for row in rows])
+    if not df.empty and "created_at" in df:
+        df["created_at"] = df["created_at"].apply(format_local_datetime)
+    return df
+
+
+def format_local_datetime(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC_TIMEZONE)
+    local_time = parsed.astimezone(APP_TIMEZONE)
+    return local_time.strftime("%Y-%m-%d %H:%M:%S MYT")
 
 
 def account_exists(person_name: str) -> bool:
