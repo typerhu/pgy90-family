@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 APP_DIR = Path(__file__).parent
@@ -25,6 +26,8 @@ DB_PATH = DATA_DIR / "health.db"
 DEFAULT_PERSON = "我"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
+REMEMBER_COOKIE_NAME = "pgy90_family_remember"
+REMEMBER_DAYS = 30
 
 PROFILE = {
     "height_cm": 181,
@@ -81,6 +84,7 @@ RESERVED_SECRET_NAMES = {
     "INVITE_CODE",
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
+    "REMEMBER_LOGIN_SECRET",
 }
 
 DAILY_LOG_MIGRATIONS = {
@@ -172,6 +176,123 @@ def get_openai_model() -> str:
     if model:
         return str(model)
     return os.environ.get("OPENAI_MODEL", "gpt-5.5")
+
+
+def get_remember_login_secret() -> str:
+    try:
+        cookie_secret = st.secrets.get("REMEMBER_LOGIN_SECRET", "")
+    except Exception:
+        cookie_secret = ""
+    if cookie_secret:
+        return str(cookie_secret)
+    env_secret = os.environ.get("REMEMBER_LOGIN_SECRET", "")
+    if env_secret:
+        return env_secret
+    secret_parts = [
+        get_app_password(),
+        get_invite_code(),
+        *get_admin_passwords().values(),
+        *get_user_passwords().values(),
+    ]
+    combined = "|".join(part for part in secret_parts if part)
+    return combined or "pgy90-family-local-remember-login"
+
+
+def sign_remember_payload(payload: str) -> str:
+    secret_key = get_remember_login_secret().encode("utf-8")
+    return hmac.new(secret_key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def make_remember_token(person_name: str, is_admin: bool) -> str:
+    expires_at = int((datetime.now(UTC_TIMEZONE) + timedelta(days=REMEMBER_DAYS)).timestamp())
+    payload = f"{person_name}|{1 if is_admin else 0}|{expires_at}"
+    encoded_payload = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"{encoded_payload}.{sign_remember_payload(payload)}"
+
+
+def parse_remember_token(token: str) -> tuple[str, bool] | None:
+    parts = str(token or "").split(".", 1)
+    if len(parts) != 2:
+        return None
+    encoded_payload, signature = parts
+    padding = "=" * (-len(encoded_payload) % 4)
+    try:
+        payload = base64.urlsafe_b64decode(f"{encoded_payload}{padding}").decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not hmac.compare_digest(signature, sign_remember_payload(payload)):
+        return None
+    payload_parts = payload.split("|")
+    if len(payload_parts) != 3:
+        return None
+    person_name, is_admin_value, expires_at_value = payload_parts
+    try:
+        expires_at = int(expires_at_value)
+    except ValueError:
+        return None
+    if datetime.now(UTC_TIMEZONE).timestamp() > expires_at:
+        return None
+    return person_name, is_admin_value == "1"
+
+
+def remember_user_exists(person_name: str, is_admin: bool) -> bool:
+    if is_admin:
+        return person_name in get_admin_passwords()
+    return (
+        person_name in registered_usernames()
+        or person_name in get_user_passwords()
+        or bool(get_app_password())
+    )
+
+
+def apply_remembered_login() -> None:
+    if st.session_state.get("authenticated"):
+        return
+    token = st.context.cookies.get(REMEMBER_COOKIE_NAME)
+    remembered = parse_remember_token(token)
+    if remembered is None:
+        return
+    person_name, is_admin = remembered
+    if not remember_user_exists(person_name, is_admin):
+        return
+    st.session_state["authenticated"] = True
+    st.session_state["authenticated_person"] = person_name
+    st.session_state["is_admin"] = is_admin
+
+
+def set_remember_cookie(token: str) -> None:
+    components.html(
+        f"""
+        <script>
+        document.cookie = "{REMEMBER_COOKIE_NAME}={token}; Max-Age={REMEMBER_DAYS * 24 * 60 * 60}; Path=/; SameSite=Lax; Secure";
+        window.parent.location.reload();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def clear_remember_cookie() -> None:
+    components.html(
+        f"""
+        <script>
+        document.cookie = "{REMEMBER_COOKIE_NAME}=; Max-Age=0; Path=/; SameSite=Lax; Secure";
+        window.parent.location.reload();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def finish_login(person_name: str | None, is_admin: bool, remember_me: bool) -> None:
+    st.session_state["authenticated"] = True
+    st.session_state["is_admin"] = is_admin
+    if person_name:
+        st.session_state["authenticated_person"] = person_name
+    if remember_me and person_name:
+        set_remember_cookie(make_remember_token(person_name, is_admin))
+        st.stop()
+    st.rerun()
 
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
@@ -332,6 +453,8 @@ def require_login() -> str | None:
         st.error("尚未設定登入方式。請先在 Streamlit Secrets 加上 INVITE_CODE 或 [admins]。")
         st.stop()
 
+    apply_remembered_login()
+
     if st.session_state.get("authenticated"):
         with st.sidebar:
             current_user = st.session_state.get("authenticated_person")
@@ -343,7 +466,8 @@ def require_login() -> str | None:
                 st.session_state["authenticated"] = False
                 st.session_state.pop("authenticated_person", None)
                 st.session_state.pop("is_admin", None)
-                st.rerun()
+                clear_remember_cookie()
+                st.stop()
         return st.session_state.get("authenticated_person")
 
     st.title("家庭健康管理")
@@ -359,6 +483,7 @@ def require_login() -> str | None:
             if available_users:
                 selected_user = st.selectbox("使用者", available_users)
             entered_password = st.text_input("密碼", type="password")
+            remember_me = st.checkbox(f"記住我 {REMEMBER_DAYS} 天", value=True)
             submitted = st.form_submit_button("登入", use_container_width=True)
 
         if submitted:
@@ -366,30 +491,19 @@ def require_login() -> str | None:
                 entered_password,
                 admin_passwords.get(selected_user, ""),
             ):
-                st.session_state["authenticated"] = True
-                st.session_state["authenticated_person"] = selected_user
-                st.session_state["is_admin"] = True
-                st.rerun()
+                finish_login(selected_user, True, remember_me)
             elif selected_user and verify_account(selected_user, entered_password):
-                st.session_state["authenticated"] = True
-                st.session_state["authenticated_person"] = selected_user
-                st.session_state["is_admin"] = False
                 add_person(selected_user or "")
-                st.rerun()
+                finish_login(selected_user, False, remember_me)
             elif user_passwords:
                 expected_password = user_passwords.get(selected_user or "", "")
                 if hmac.compare_digest(entered_password, expected_password):
-                    st.session_state["authenticated"] = True
-                    st.session_state["authenticated_person"] = selected_user
-                    st.session_state["is_admin"] = False
                     add_person(selected_user or "")
-                    st.rerun()
+                    finish_login(selected_user, False, remember_me)
                 else:
                     st.error("使用者或密碼不正確。")
             elif password and hmac.compare_digest(entered_password, password):
-                st.session_state["authenticated"] = True
-                st.session_state["is_admin"] = False
-                st.rerun()
+                finish_login(None, False, False)
             else:
                 st.error("使用者或密碼不正確。")
 

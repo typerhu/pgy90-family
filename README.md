@@ -72,6 +72,7 @@ App 支援家人自己註冊帳號。部署到 Streamlit Cloud 後，到 app 的
 ```toml
 INVITE_CODE = "換成你的家庭邀請碼"
 OPENAI_API_KEY = "換成你的 OpenAI API key"
+REMEMBER_LOGIN_SECRET = "換成一串長一點的隨機文字"
 
 [admins]
 Teo = "換成你的管理員密碼"
@@ -82,6 +83,8 @@ Teo = "換成你的管理員密碼"
 管理員登入後可以切換查看使用者資料、重設使用者密碼，或刪除使用者與其所有資料。
 
 `OPENAI_API_KEY` 用於 AI 飲食教練的拍照 / 上傳照片辨識。如果沒有設定，文字輸入仍可使用，照片辨識會顯示設定提醒。
+
+`REMEMBER_LOGIN_SECRET` 用於「記住我」登入狀態簽章，建議正式部署時設定一串只有管理者知道的隨機文字。
 
 如果你想由管理者先建立固定帳號，也仍可使用：
 
