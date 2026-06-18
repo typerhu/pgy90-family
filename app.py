@@ -879,11 +879,13 @@ def default_targets(weight_kg: float, goal: str) -> tuple[int, int, int]:
     return max(calories, 1500), protein, 28
 
 
-def detect_meal_type(text: str) -> str:
-    for meal_type, keywords in MEAL_KEYWORDS.items():
-        if any(keyword in text for keyword in keywords):
-            return meal_type
-    hour = datetime.now().hour
+def meal_type_by_local_time(now: datetime | None = None) -> str:
+    local_now = now or datetime.now(APP_TIMEZONE)
+    if local_now.tzinfo is None:
+        local_now = local_now.replace(tzinfo=APP_TIMEZONE)
+    else:
+        local_now = local_now.astimezone(APP_TIMEZONE)
+    hour = local_now.hour
     if hour < 10:
         return "早餐"
     if hour < 15:
@@ -891,6 +893,13 @@ def detect_meal_type(text: str) -> str:
     if hour < 21:
         return "晚餐"
     return "點心"
+
+
+def detect_meal_type(text: str) -> str:
+    for meal_type, keywords in MEAL_KEYWORDS.items():
+        if any(keyword in text for keyword in keywords):
+            return meal_type
+    return meal_type_by_local_time()
 
 
 def quantity_multiplier(text: str) -> float:
@@ -997,6 +1006,8 @@ def analyze_meal_photo(image_bytes: bytes, mime_type: str, meal_type_override: s
         raise RuntimeError("尚未設定 OPENAI_API_KEY。")
 
     image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+    local_now = datetime.now(APP_TIMEZONE)
+    default_meal_type = meal_type_by_local_time(local_now)
     prompt = """
 你是家庭健康管理 App 的飲食紀錄助手。請根據照片辨識餐點並估算營養。
 請只回傳 JSON，不要加 Markdown。欄位：
@@ -1010,6 +1021,12 @@ matched: 簡短說明辨識到的主要食物；如果不確定，說明不確�
 """
     if meal_type_override != "自動判斷":
         prompt += f"\n使用者指定餐別為「{meal_type_override}」，meal_type 請使用這個值。"
+    else:
+        prompt += (
+            "\n使用者選擇自動判斷餐別。"
+            f"目前馬來西亞時間是 {local_now.strftime('%Y-%m-%d %H:%M')}，"
+            f"若照片本身無法明確判斷餐別，meal_type 請使用「{default_meal_type}」。"
+        )
 
     request_body = {
         "model": get_openai_model(),
@@ -1046,7 +1063,7 @@ matched: 簡短說明辨識到的主要食物；如果不確定，說明不確�
     if meal_type_override != "自動判斷":
         result["meal_type"] = meal_type_override
     if result["meal_type"] not in MEAL_TYPES:
-        result["meal_type"] = "點心"
+        result["meal_type"] = default_meal_type
     return result
 
 
