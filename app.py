@@ -40,6 +40,7 @@ FOOD_CATEGORIES = ["均衡", "高蛋白", "外食", "應酬", "偏清淡", "偏�
 WORKOUT_TYPES = ["重訓", "有氧", "伸展", "球類", "步行", "休息", "其他"]
 REHAB_TYPES = ["肩頸", "下背", "髖/腿", "膝蓋", "足踝", "全身活動度", "其他"]
 GOALS = ["減脂", "增肌", "維持"]
+BODY_SHAPE_GOALS = ["健康減脂", "精實有線條", "增肌維持"]
 
 FOOD_ESTIMATES = {
     "雞胸": (165, 31, 0, 0, 3.6),
@@ -1052,6 +1053,34 @@ def default_targets(weight_kg: float, goal: str) -> tuple[int, int, int]:
     return max(calories, 1500), protein, 28
 
 
+def recommended_body_targets(height_cm: float, body_shape_goal: str) -> dict[str, float]:
+    height_m = height_cm / 100
+    if body_shape_goal == "精實有線條":
+        bmi_target = 22.0
+        body_fat_min = 13.0
+        body_fat_max = 16.0
+    elif body_shape_goal == "增肌維持":
+        bmi_target = 23.0
+        body_fat_min = 15.0
+        body_fat_max = 20.0
+    else:
+        bmi_target = 22.0
+        body_fat_min = 15.0
+        body_fat_max = 18.0
+
+    healthy_min = 18.5 * height_m * height_m
+    healthy_max = 24.9 * height_m * height_m
+    target_weight = bmi_target * height_m * height_m
+    target_weight = min(max(target_weight, healthy_min), healthy_max)
+    return {
+        "target_weight_kg": round(target_weight, 1),
+        "target_body_fat_min": body_fat_min,
+        "target_body_fat_max": body_fat_max,
+        "healthy_weight_min": round(healthy_min, 1),
+        "healthy_weight_max": round(healthy_max, 1),
+    }
+
+
 def meal_type_by_local_time(now: datetime | None = None) -> str:
     local_now = now or datetime.now(APP_TIMEZONE)
     if local_now.tzinfo is None:
@@ -1968,11 +1997,26 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 format="%.1f",
                 width=120,
             )
+            body_shape_goal = st.selectbox("體態方向", BODY_SHAPE_GOALS)
+            recommended_targets = recommended_body_targets(height_cm, body_shape_goal)
+            st.caption(
+                "建議："
+                f"目標體重 {compact_number(recommended_targets['target_weight_kg'])} kg；"
+                f"體脂 {compact_number(recommended_targets['target_body_fat_min'])}-"
+                f"{compact_number(recommended_targets['target_body_fat_max'])}%；"
+                f"健康體重範圍 {compact_number(recommended_targets['healthy_weight_min'])}-"
+                f"{compact_number(recommended_targets['healthy_weight_max'])} kg"
+            )
+            if st.form_submit_button("套用建議值", use_container_width=True):
+                st.session_state[f"target_weight_{person_name}"] = recommended_targets["target_weight_kg"]
+                st.session_state[f"target_body_fat_min_{person_name}"] = recommended_targets["target_body_fat_min"]
+                st.session_state[f"target_body_fat_max_{person_name}"] = recommended_targets["target_body_fat_max"]
+                st.rerun()
             target_weight = st.number_input(
                 "目標體重 kg",
                 min_value=30.0,
                 max_value=180.0,
-                value=float(targets["target_weight_kg"]),
+                value=float(st.session_state.get(f"target_weight_{person_name}", targets["target_weight_kg"])),
                 step=0.1,
                 format="%.1f",
                 width=120,
@@ -1981,7 +2025,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 "目標體脂下限 %",
                 min_value=3.0,
                 max_value=45.0,
-                value=float(targets["target_body_fat_min"]),
+                value=float(st.session_state.get(f"target_body_fat_min_{person_name}", targets["target_body_fat_min"])),
                 step=0.5,
                 format="%.1f",
                 width=120,
@@ -1990,7 +2034,10 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 "目標體脂上限 %",
                 min_value=3.0,
                 max_value=45.0,
-                value=max(float(targets["target_body_fat_max"]), float(target_body_fat_min)),
+                value=max(
+                    float(st.session_state.get(f"target_body_fat_max_{person_name}", targets["target_body_fat_max"])),
+                    float(target_body_fat_min),
+                ),
                 step=0.5,
                 format="%.1f",
                 width=120,
@@ -2044,6 +2091,9 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         "preferences": preferences.strip(),
                     }
                 )
+                st.session_state.pop(f"target_weight_{person_name}", None)
+                st.session_state.pop(f"target_body_fat_min_{person_name}", None)
+                st.session_state.pop(f"target_body_fat_max_{person_name}", None)
                 st.success("已儲存你的飲食偏好。")
                 st.rerun()
 
