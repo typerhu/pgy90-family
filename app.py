@@ -265,7 +265,6 @@ def set_remember_cookie(token: str) -> None:
         f"""
         <script>
         document.cookie = "{REMEMBER_COOKIE_NAME}={token}; Max-Age={REMEMBER_DAYS * 24 * 60 * 60}; Path=/; SameSite=Lax; Secure";
-        window.parent.location.reload();
         </script>
         """,
         height=0,
@@ -277,7 +276,6 @@ def clear_remember_cookie() -> None:
         f"""
         <script>
         document.cookie = "{REMEMBER_COOKIE_NAME}=; Max-Age=0; Path=/; SameSite=Lax; Secure";
-        window.parent.location.reload();
         </script>
         """,
         height=0,
@@ -290,8 +288,7 @@ def finish_login(person_name: str | None, is_admin: bool, remember_me: bool) -> 
     if person_name:
         st.session_state["authenticated_person"] = person_name
     if remember_me and person_name:
-        set_remember_cookie(make_remember_token(person_name, is_admin))
-        st.stop()
+        st.session_state["remember_token_to_set"] = make_remember_token(person_name, is_admin)
     st.rerun()
 
 
@@ -456,6 +453,9 @@ def require_login() -> str | None:
     apply_remembered_login()
 
     if st.session_state.get("authenticated"):
+        remember_token = st.session_state.pop("remember_token_to_set", None)
+        if remember_token:
+            set_remember_cookie(remember_token)
         with st.sidebar:
             current_user = st.session_state.get("authenticated_person")
             if current_user:
@@ -467,7 +467,7 @@ def require_login() -> str | None:
                 st.session_state.pop("authenticated_person", None)
                 st.session_state.pop("is_admin", None)
                 clear_remember_cookie()
-                st.stop()
+                st.rerun()
         return st.session_state.get("authenticated_person")
 
     st.title("家庭健康管理")
