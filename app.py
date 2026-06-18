@@ -512,6 +512,7 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS coach_profiles (
             person_name TEXT PRIMARY KEY,
             goal TEXT NOT NULL,
+            height_cm REAL,
             current_weight_kg REAL,
             daily_calorie_target INTEGER,
             protein_target_g INTEGER,
@@ -521,18 +522,23 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    coach_profile_columns = table_columns(conn, "coach_profiles")
+    if "height_cm" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN height_cm REAL")
+
     old_profile = conn.execute("SELECT * FROM coach_profile WHERE id = 1").fetchone()
     if old_profile:
         conn.execute(
             """
             INSERT OR IGNORE INTO coach_profiles (
-                person_name, goal, current_weight_kg, daily_calorie_target,
+                person_name, goal, height_cm, current_weight_kg, daily_calorie_target,
                 protein_target_g, fiber_target_g, preferences, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 DEFAULT_PERSON,
                 old_profile["goal"],
+                PROFILE["height_cm"],
                 old_profile["current_weight_kg"],
                 old_profile["daily_calorie_target"],
                 old_profile["protein_target_g"],
@@ -757,6 +763,7 @@ def upsert_daily_log(values: dict) -> None:
 
 
 def load_logs(person_name: str) -> pd.DataFrame:
+    height_cm = get_person_height_cm(person_name)
     with connect() as conn:
         df = pd.read_sql_query(
             "SELECT * FROM daily_logs WHERE person_name = ? ORDER BY log_date",
@@ -765,7 +772,7 @@ def load_logs(person_name: str) -> pd.DataFrame:
             parse_dates=["log_date"],
         )
     if not df.empty:
-        df["bmi"] = df["weight_kg"] / ((PROFILE["height_cm"] / 100) ** 2)
+        df["bmi"] = df["weight_kg"] / ((height_cm / 100) ** 2)
     return df
 
 
@@ -777,17 +784,25 @@ def get_coach_profile(person_name: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def get_person_height_cm(person_name: str) -> float:
+    profile = get_coach_profile(person_name)
+    if profile is None:
+        return float(PROFILE["height_cm"])
+    return float(profile["height_cm"] or PROFILE["height_cm"])
+
+
 def save_coach_profile(person_name: str, values: dict) -> None:
     with connect() as conn:
         conn.execute(
             """
             INSERT INTO coach_profiles (
-                person_name, goal, current_weight_kg, daily_calorie_target,
+                person_name, goal, height_cm, current_weight_kg, daily_calorie_target,
                 protein_target_g, fiber_target_g, preferences, updated_at
-            ) VALUES (:person_name, :goal, :current_weight_kg, :daily_calorie_target,
+            ) VALUES (:person_name, :goal, :height_cm, :current_weight_kg, :daily_calorie_target,
                 :protein_target_g, :fiber_target_g, :preferences, :updated_at)
             ON CONFLICT(person_name) DO UPDATE SET
                 goal = excluded.goal,
+                height_cm = excluded.height_cm,
                 current_weight_kg = excluded.current_weight_kg,
                 daily_calorie_target = excluded.daily_calorie_target,
                 protein_target_g = excluded.protein_target_g,
@@ -1152,7 +1167,7 @@ def get_saved_report(person_name: str, window: WeekWindow) -> sqlite3.Row | None
         ).fetchone()
 
 
-def metric_cards(df: pd.DataFrame) -> None:
+def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
     sorted_df = df.sort_values("log_date") if not df.empty else df
 
     def latest_pair(column: str) -> tuple[float | None, float | None]:
@@ -1176,7 +1191,7 @@ def metric_cards(df: pd.DataFrame) -> None:
                 ["最新體重", f"{compact_number(weight)} kg", format_delta(weight, prev_weight, "kg") or "-"],
                 ["最新體脂", f"{compact_number(body_fat)}%", format_delta(body_fat, prev_body_fat, "%") or "-"],
                 ["最新腰圍", f"{compact_number(waist)} cm", format_delta(waist, prev_waist, "cm") or "-"],
-                ["BMI", compact_number(bmi), "181 cm"],
+                ["BMI", compact_number(bmi), f"{compact_number(height_cm)} cm"],
             ],
             columns=["指標", "目前", "變化"],
         ),
@@ -1391,13 +1406,13 @@ def daily_input_page(person_name: str) -> None:
         st.rerun()
 
 
-def trend_page(df: pd.DataFrame) -> None:
+def trend_page(df: pd.DataFrame, height_cm: float) -> None:
     st.subheader("趨勢圖表")
     if df.empty:
         st.info("還沒有資料。先到每日輸入新增第一筆紀錄。")
         return
 
-    metric_cards(df)
+    metric_cards(df, height_cm)
 
     days = st.slider("顯示最近幾天", 7, 180, 60, step=7)
     cutoff = pd.Timestamp(date.today() - timedelta(days=days - 1))
@@ -1490,10 +1505,12 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     st.subheader(f"{person_name}｜AI飲食教練")
     profile = get_coach_profile(person_name)
     current_weight = latest_weight(df)
+    current_height = float(PROFILE["height_cm"])
     default_calories, default_protein, default_fiber = default_targets(current_weight, "減脂")
 
     if profile is not None:
         current_goal = profile["goal"]
+        current_height = float(profile["height_cm"] or current_height)
         current_weight = float(profile["current_weight_kg"] or current_weight)
         default_calories = int(profile["daily_calorie_target"] or default_calories)
         default_protein = int(profile["protein_target_g"] or default_protein)
@@ -1516,6 +1533,15 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 max_value=180.0,
                 value=float(current_weight),
                 step=0.1,
+                format="%.1f",
+                width=120,
+            )
+            height_cm = st.number_input(
+                "身高 cm",
+                min_value=100.0,
+                max_value=230.0,
+                value=float(current_height),
+                step=0.5,
                 format="%.1f",
                 width=120,
             )
@@ -1554,6 +1580,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                     person_name,
                     {
                         "goal": goal,
+                        "height_cm": height_cm,
                         "current_weight_kg": weight,
                         "daily_calorie_target": calorie_target,
                         "protein_target_g": protein_target,
@@ -1876,8 +1903,9 @@ def app() -> None:
     st.title("家庭健康管理")
     st.caption(f"目前使用者：{selected_person}")
 
+    height_cm = get_person_height_cm(selected_person)
     df = load_logs(selected_person)
-    metric_cards(df)
+    metric_cards(df, height_cm)
 
     st.markdown(
         f"目標：{PROFILE['target_weight_kg']} kg，體脂 "
@@ -1892,7 +1920,7 @@ def app() -> None:
     with tab_daily:
         daily_input_page(selected_person)
     with tab_trends:
-        trend_page(load_logs(selected_person))
+        trend_page(load_logs(selected_person), height_cm)
     with tab_weekly:
         weekly_report_page(load_logs(selected_person), selected_person)
 
