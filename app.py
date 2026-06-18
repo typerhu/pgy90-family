@@ -32,6 +32,7 @@ REMEMBER_COOKIE_NAME = "pgy90_family_remember"
 REMEMBER_DAYS = 30
 REMEMBER_DISABLED_KEY = "remember_login_disabled"
 REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
+REGISTRATION_SUCCESS_KEY = "registration_success_message"
 
 
 # Constants / Defaults
@@ -499,6 +500,9 @@ def require_login() -> str | None:
 
     st.title("家庭健康管理")
     st.caption("請先登入。")
+    registration_success = st.session_state.pop(REGISTRATION_SUCCESS_KEY, None)
+    if registration_success:
+        st.success(registration_success)
     login_tab, register_tab = st.tabs(["登入", "註冊"])
 
     with login_tab:
@@ -561,7 +565,8 @@ def require_login() -> str | None:
                     st.warning("邀請碼不正確。")
                 else:
                     create_account(cleaned_user, new_password)
-                    st.success("帳號已建立，現在可以登入。")
+                    st.session_state[REGISTRATION_SUCCESS_KEY] = "帳號已建立，現在可以登入。"
+                    st.rerun()
     st.stop()
 
 
