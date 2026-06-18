@@ -1304,24 +1304,32 @@ def daily_input_page(person_name: str) -> None:
             step=1,
         )
 
-    with st.form("daily_log_form"):
-        st.markdown("#### 飲食")
+    st.markdown("#### 飲食")
+    existing_food_category = existing_value("food_category", "")
+    food_recorded = st.checkbox(
+        "有記錄飲食總評",
+        value=bool(existing_food_category),
+        key=f"food_recorded_{person_name}_{selected_date.isoformat()}",
+    )
+    food_category = None
+    if food_recorded:
         food_category = st.selectbox(
             "當日總評",
             FOOD_CATEGORIES,
-            index=FOOD_CATEGORIES.index(existing_value("food_category", "均衡"))
-            if existing_value("food_category", "均衡") in FOOD_CATEGORIES
+            index=FOOD_CATEGORIES.index(existing_food_category)
+            if existing_food_category in FOOD_CATEGORIES
             else 0,
         )
-        breakfast_category = existing_value("breakfast_category", "")
-        breakfast_notes = existing_value("breakfast_notes", "")
-        lunch_category = existing_value("lunch_category", "")
-        lunch_notes = existing_value("lunch_notes", "")
-        dinner_category = existing_value("dinner_category", "")
-        dinner_notes = existing_value("dinner_notes", "")
-        snack_notes = existing_value("snack_notes", "")
-        food_notes = existing_value("food_notes", "")
+    breakfast_category = existing_value("breakfast_category", "")
+    breakfast_notes = existing_value("breakfast_notes", "")
+    lunch_category = existing_value("lunch_category", "")
+    lunch_notes = existing_value("lunch_notes", "")
+    dinner_category = existing_value("dinner_category", "")
+    dinner_notes = existing_value("dinner_notes", "")
+    snack_notes = existing_value("snack_notes", "")
+    food_notes = existing_value("food_notes", "")
 
+    with st.form("daily_log_form"):
         st.markdown("#### 運動")
 
         workout_type = st.selectbox(
@@ -1413,15 +1421,15 @@ def daily_input_page(person_name: str) -> None:
                 if sleep_recorded
                 else None,
                 "sleep_quality": sleep_quality if sleep_recorded else None,
-                "food_category": food_category,
-                "breakfast_category": breakfast_category,
-                "breakfast_notes": str(breakfast_notes).strip(),
-                "lunch_category": lunch_category,
-                "lunch_notes": str(lunch_notes).strip(),
-                "dinner_category": dinner_category,
-                "dinner_notes": str(dinner_notes).strip(),
-                "snack_notes": str(snack_notes).strip(),
-                "food_notes": str(food_notes).strip(),
+                "food_category": food_category if food_recorded else None,
+                "breakfast_category": breakfast_category if food_recorded else "",
+                "breakfast_notes": str(breakfast_notes).strip() if food_recorded else "",
+                "lunch_category": lunch_category if food_recorded else "",
+                "lunch_notes": str(lunch_notes).strip() if food_recorded else "",
+                "dinner_category": dinner_category if food_recorded else "",
+                "dinner_notes": str(dinner_notes).strip() if food_recorded else "",
+                "snack_notes": str(snack_notes).strip() if food_recorded else "",
+                "food_notes": str(food_notes).strip() if food_recorded else "",
                 "workout_type": workout_type,
                 "workout_minutes": workout_minutes,
                 "avg_heart_rate": avg_heart_rate or None,
