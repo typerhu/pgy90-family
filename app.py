@@ -250,9 +250,8 @@ def remember_user_exists(person_name: str, is_admin: bool) -> bool:
     )
 
 
-@st.cache_resource
 def get_cookie_manager():
-    return stx.CookieManager()
+    return stx.CookieManager(key="remember_cookie_manager")
 
 
 def get_remember_cookie() -> str:
