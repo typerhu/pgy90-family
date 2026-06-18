@@ -1019,6 +1019,25 @@ def latest_weight(df: pd.DataFrame) -> float:
     return float(weights.iloc[-1]["weight_kg"])
 
 
+def latest_weight_from_logs(df: pd.DataFrame) -> float | None:
+    if df.empty or "weight_kg" not in df:
+        return None
+    weights = df.dropna(subset=["weight_kg"]).sort_values("log_date")
+    if weights.empty:
+        return None
+    return float(weights.iloc[-1]["weight_kg"])
+
+
+def average_weight_last_days(df: pd.DataFrame, days: int = 7) -> float | None:
+    if df.empty or "weight_kg" not in df or "log_date" not in df:
+        return None
+    cutoff = pd.Timestamp(date.today() - timedelta(days=days - 1))
+    recent = df[df["log_date"] >= cutoff].dropna(subset=["weight_kg"])
+    if recent.empty:
+        return None
+    return float(recent["weight_kg"].mean())
+
+
 def default_targets(weight_kg: float, goal: str) -> tuple[int, int, int]:
     maintenance = int(round(weight_kg * 31))
     if goal == "減脂":
@@ -1903,7 +1922,9 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
 def coach_page(df: pd.DataFrame, person_name: str) -> None:
     st.subheader(f"{person_name}｜AI飲食教練")
     profile = get_coach_profile(person_name)
-    current_weight = latest_weight(df)
+    latest_log_weight = latest_weight_from_logs(df)
+    average_week_weight = average_weight_last_days(df)
+    current_weight = latest_log_weight or 75.0
     current_height = float(PROFILE["height_cm"])
     targets = get_person_targets(person_name)
     default_calories, default_protein, default_fiber = default_targets(current_weight, "減脂")
@@ -1911,7 +1932,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     if profile is not None:
         current_goal = profile["goal"]
         current_height = float(profile["height_cm"] or current_height)
-        current_weight = float(profile["current_weight_kg"] or current_weight)
+        current_weight = float(latest_log_weight or profile["current_weight_kg"] or current_weight)
         default_calories = int(profile["daily_calorie_target"] or default_calories)
         default_protein = int(profile["protein_target_g"] or default_protein)
         default_fiber = int(profile["fiber_target_g"] or default_fiber)
@@ -1936,6 +1957,8 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 format="%.1f",
                 width=120,
             )
+            if average_week_weight is not None:
+                st.caption(f"最近 7 天平均：{compact_number(average_week_weight)} kg")
             height_cm = st.number_input(
                 "身高 cm",
                 min_value=100.0,
