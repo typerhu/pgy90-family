@@ -1211,24 +1211,42 @@ def daily_input_page(person_name: str) -> None:
         return existing[key]
 
     st.markdown("#### 身體指標")
-    weight = st.number_input(
-        "體重 kg",
-        min_value=30.0,
-        max_value=180.0,
-        value=float(existing_value("weight_kg", 75.0)),
-        step=0.1,
-        format="%.1f",
-        width=120,
+    existing_weight = existing_value("weight_kg", None)
+    weight_measured = st.checkbox(
+        "今天有量體重",
+        value=existing_weight is not None,
+        key=f"weight_measured_{person_name}_{selected_date.isoformat()}",
     )
-    body_fat = st.number_input(
-        "體脂 %",
-        min_value=3.0,
-        max_value=45.0,
-        value=float(existing_value("body_fat_percent", 15.0)),
-        step=0.1,
-        format="%.1f",
-        width=120,
+    weight = None
+    if weight_measured:
+        weight = st.number_input(
+            "體重 kg",
+            min_value=30.0,
+            max_value=180.0,
+            value=float(existing_weight if existing_weight is not None else 75.0),
+            step=0.1,
+            format="%.1f",
+            width=120,
+        )
+
+    existing_body_fat = existing_value("body_fat_percent", None)
+    body_fat_measured = st.checkbox(
+        "今天有量體脂",
+        value=existing_body_fat is not None,
+        key=f"body_fat_measured_{person_name}_{selected_date.isoformat()}",
     )
+    body_fat = None
+    if body_fat_measured:
+        body_fat = st.number_input(
+            "體脂 %",
+            min_value=3.0,
+            max_value=45.0,
+            value=float(existing_body_fat if existing_body_fat is not None else 15.0),
+            step=0.1,
+            format="%.1f",
+            width=120,
+        )
+
     existing_waist = existing_value("waist_cm", None)
     waist_measured = st.checkbox(
         "今天有量腰圍",
@@ -1247,10 +1265,20 @@ def daily_input_page(person_name: str) -> None:
             width=120,
         )
 
-    with st.form("daily_log_form"):
-        st.markdown("#### 睡眠")
+    st.markdown("#### 睡眠")
+    existing_sleep_hours = existing_value("sleep_hours", None)
+    existing_sleep_quality = existing_value("sleep_quality", None)
+    sleep_recorded = st.checkbox(
+        "有記錄睡眠",
+        value=existing_sleep_hours is not None or existing_sleep_quality is not None,
+        key=f"sleep_recorded_{person_name}_{selected_date.isoformat()}",
+    )
+    sleep_hour_part = 0
+    sleep_minute_part = 0
+    sleep_quality = None
+    if sleep_recorded:
         current_sleep_hours, current_sleep_minutes = split_sleep_time(
-            existing_value("sleep_hours", 7.0)
+            existing_sleep_hours if existing_sleep_hours is not None else 7.0
         )
         sleep_hour_part = st.number_input(
             "小時",
@@ -1272,10 +1300,11 @@ def daily_input_page(person_name: str) -> None:
             "睡眠品質 %",
             min_value=0,
             max_value=100,
-            value=int(existing_value("sleep_quality", 75)),
+            value=int(existing_sleep_quality if existing_sleep_quality is not None else 75),
             step=1,
         )
 
+    with st.form("daily_log_form"):
         st.markdown("#### 飲食")
         food_category = st.selectbox(
             "當日總評",
@@ -1380,8 +1409,10 @@ def daily_input_page(person_name: str) -> None:
                 "weight_kg": weight,
                 "body_fat_percent": body_fat,
                 "waist_cm": waist if waist_measured else None,
-                "sleep_hours": sleep_hour_part + (sleep_minute_part / 60),
-                "sleep_quality": sleep_quality,
+                "sleep_hours": sleep_hour_part + (sleep_minute_part / 60)
+                if sleep_recorded
+                else None,
+                "sleep_quality": sleep_quality if sleep_recorded else None,
                 "food_category": food_category,
                 "breakfast_category": breakfast_category,
                 "breakfast_notes": str(breakfast_notes).strip(),
