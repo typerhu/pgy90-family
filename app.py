@@ -1900,8 +1900,8 @@ def app() -> None:
     else:
         selected_person = person_selector()
 
-    st.title("家庭健康管理")
-    st.caption(f"目前使用者：{selected_person}")
+    st.title(f"{selected_person} 的健康管理")
+    st.caption(f"目前查看：{selected_person}")
 
     height_cm = get_person_height_cm(selected_person)
     df = load_logs(selected_person)
