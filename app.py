@@ -16,8 +16,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import extra_streamlit_components as stx
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 APP_DIR = Path(__file__).parent
@@ -250,10 +250,23 @@ def remember_user_exists(person_name: str, is_admin: bool) -> bool:
     )
 
 
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+
+def get_remember_cookie() -> str:
+    cookie_manager = get_cookie_manager()
+    token = cookie_manager.get(cookie=REMEMBER_COOKIE_NAME)
+    if token:
+        return str(token)
+    return str(st.context.cookies.get(REMEMBER_COOKIE_NAME, ""))
+
+
 def apply_remembered_login() -> None:
     if st.session_state.get("authenticated"):
         return
-    token = st.context.cookies.get(REMEMBER_COOKIE_NAME)
+    token = get_remember_cookie()
     remembered = parse_remember_token(token)
     if remembered is None:
         return
@@ -266,25 +279,15 @@ def apply_remembered_login() -> None:
 
 
 def set_remember_cookie(token: str) -> None:
-    components.html(
-        f"""
-        <script>
-        document.cookie = "{REMEMBER_COOKIE_NAME}={token}; Max-Age={REMEMBER_DAYS * 24 * 60 * 60}; Path=/; SameSite=Lax; Secure";
-        </script>
-        """,
-        height=0,
+    get_cookie_manager().set(
+        cookie=REMEMBER_COOKIE_NAME,
+        val=token,
+        expires_at=datetime.now(UTC_TIMEZONE) + timedelta(days=REMEMBER_DAYS),
     )
 
 
 def clear_remember_cookie() -> None:
-    components.html(
-        f"""
-        <script>
-        document.cookie = "{REMEMBER_COOKIE_NAME}=; Max-Age=0; Path=/; SameSite=Lax; Secure";
-        </script>
-        """,
-        height=0,
-    )
+    get_cookie_manager().delete(cookie=REMEMBER_COOKIE_NAME)
 
 
 def finish_login(person_name: str | None, is_admin: bool, remember_me: bool) -> None:
