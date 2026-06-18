@@ -123,6 +123,16 @@ def get_user_passwords() -> dict[str, str]:
     return {str(username): str(password) for username, password in dict(users).items()}
 
 
+def get_admin_passwords() -> dict[str, str]:
+    try:
+        admins = st.secrets.get("admins", {})
+    except Exception:
+        admins = {}
+    if not admins:
+        return {}
+    return {str(username): str(password) for username, password in dict(admins).items()}
+
+
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
     password_salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(
@@ -146,6 +156,70 @@ def create_account(person_name: str, password: str) -> None:
             (person_name, salt, password_hash, now),
         )
     add_person(person_name)
+
+
+def set_account_password(person_name: str, password: str) -> None:
+    salt, password_hash = hash_password(password)
+    now = datetime.now().isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_users (person_name, password_salt, password_hash, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(person_name) DO UPDATE SET
+                password_salt = excluded.password_salt,
+                password_hash = excluded.password_hash
+            """,
+            (person_name, salt, password_hash, now),
+        )
+    add_person(person_name)
+
+
+def delete_person_data(person_name: str) -> None:
+    with connect() as conn:
+        for table_name in [
+            "daily_logs",
+            "meal_logs",
+            "weekly_reports",
+            "coach_profiles",
+            "app_users",
+            "people",
+        ]:
+            conn.execute(f"DELETE FROM {table_name} WHERE person_name = ?", (person_name,))
+
+
+def user_overview() -> pd.DataFrame:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                p.person_name,
+                COALESCE(d.daily_count, 0) AS daily_logs,
+                COALESCE(m.meal_count, 0) AS meal_logs,
+                COALESCE(w.weekly_count, 0) AS weekly_reports,
+                CASE WHEN u.person_name IS NULL THEN '否' ELSE '是' END AS has_login,
+                p.created_at
+            FROM people p
+            LEFT JOIN (
+                SELECT person_name, COUNT(*) AS daily_count
+                FROM daily_logs
+                GROUP BY person_name
+            ) d ON d.person_name = p.person_name
+            LEFT JOIN (
+                SELECT person_name, COUNT(*) AS meal_count
+                FROM meal_logs
+                GROUP BY person_name
+            ) m ON m.person_name = p.person_name
+            LEFT JOIN (
+                SELECT person_name, COUNT(*) AS weekly_count
+                FROM weekly_reports
+                GROUP BY person_name
+            ) w ON w.person_name = p.person_name
+            LEFT JOIN app_users u ON u.person_name = p.person_name
+            ORDER BY p.created_at, p.person_name
+            """
+        ).fetchall()
+    return pd.DataFrame([dict(row) for row in rows])
 
 
 def account_exists(person_name: str) -> bool:
@@ -179,12 +253,13 @@ def verify_account(person_name: str, password: str) -> bool:
 
 def require_login() -> str | None:
     init_db()
+    admin_passwords = get_admin_passwords()
     user_passwords = get_user_passwords()
     registered_users = registered_usernames()
     password = get_app_password()
     invite_code = get_invite_code()
-    if not registered_users and not user_passwords and not password and not invite_code:
-        st.error("尚未設定登入方式。請先在 Streamlit Secrets 加上 INVITE_CODE。")
+    if not registered_users and not user_passwords and not admin_passwords and not password and not invite_code:
+        st.error("尚未設定登入方式。請先在 Streamlit Secrets 加上 INVITE_CODE 或 [admins]。")
         st.stop()
 
     if st.session_state.get("authenticated"):
@@ -192,9 +267,12 @@ def require_login() -> str | None:
             current_user = st.session_state.get("authenticated_person")
             if current_user:
                 st.markdown(f"### {current_user}")
+            if st.session_state.get("is_admin"):
+                st.caption("管理員模式")
             if st.button("登出", use_container_width=True):
                 st.session_state["authenticated"] = False
                 st.session_state.pop("authenticated_person", None)
+                st.session_state.pop("is_admin", None)
                 st.rerun()
         return st.session_state.get("authenticated_person")
 
@@ -204,7 +282,9 @@ def require_login() -> str | None:
 
     with login_tab:
         with st.form("login_form"):
-            available_users = sorted(set(registered_users) | set(user_passwords.keys()))
+            available_users = sorted(
+                set(registered_users) | set(user_passwords.keys()) | set(admin_passwords.keys())
+            )
             selected_user = None
             if available_users:
                 selected_user = st.selectbox("使用者", available_users)
@@ -212,9 +292,18 @@ def require_login() -> str | None:
             submitted = st.form_submit_button("登入", use_container_width=True)
 
         if submitted:
-            if selected_user and verify_account(selected_user, entered_password):
+            if selected_user in admin_passwords and hmac.compare_digest(
+                entered_password,
+                admin_passwords.get(selected_user, ""),
+            ):
                 st.session_state["authenticated"] = True
                 st.session_state["authenticated_person"] = selected_user
+                st.session_state["is_admin"] = True
+                st.rerun()
+            elif selected_user and verify_account(selected_user, entered_password):
+                st.session_state["authenticated"] = True
+                st.session_state["authenticated_person"] = selected_user
+                st.session_state["is_admin"] = False
                 add_person(selected_user or "")
                 st.rerun()
             elif user_passwords:
@@ -222,12 +311,14 @@ def require_login() -> str | None:
                 if hmac.compare_digest(entered_password, expected_password):
                     st.session_state["authenticated"] = True
                     st.session_state["authenticated_person"] = selected_user
+                    st.session_state["is_admin"] = False
                     add_person(selected_user or "")
                     st.rerun()
                 else:
                     st.error("使用者或密碼不正確。")
             elif password and hmac.compare_digest(entered_password, password):
                 st.session_state["authenticated"] = True
+                st.session_state["is_admin"] = False
                 st.rerun()
             else:
                 st.error("使用者或密碼不正確。")
@@ -1680,12 +1771,71 @@ def person_selector() -> str:
     return selected
 
 
+def admin_panel() -> str | None:
+    st.sidebar.markdown("### 管理")
+    mode = st.sidebar.radio(
+        "管理模式",
+        ["查看使用者", "管理使用者"],
+        label_visibility="collapsed",
+    )
+    people = [
+        person
+        for person in load_people()
+        if person != DEFAULT_PERSON or person_has_data(person)
+    ]
+
+    if mode == "管理使用者":
+        st.title("管理員後台")
+        overview = user_overview()
+        if overview.empty:
+            st.info("目前還沒有使用者資料。")
+        else:
+            st.dataframe(overview, use_container_width=True, hide_index=True)
+
+        st.markdown("#### 重設密碼")
+        with st.form("admin_reset_password_form"):
+            reset_user = st.selectbox("使用者", people, key="reset_user") if people else ""
+            reset_password = st.text_input("新密碼", type="password")
+            reset_submitted = st.form_submit_button("重設密碼", use_container_width=True)
+        if reset_submitted:
+            if not reset_user:
+                st.warning("目前沒有可重設的使用者。")
+            elif len(reset_password) < 4:
+                st.warning("密碼至少需要 4 個字元。")
+            else:
+                set_account_password(reset_user, reset_password)
+                st.success(f"已重設 {reset_user} 的密碼。")
+
+        st.markdown("#### 刪除使用者")
+        with st.form("admin_delete_user_form"):
+            delete_user = st.selectbox("使用者", people, key="delete_user") if people else ""
+            confirm_name = st.text_input("輸入使用者名稱確認刪除")
+            delete_submitted = st.form_submit_button("刪除使用者與所有資料", use_container_width=True)
+        if delete_submitted:
+            if not delete_user:
+                st.warning("目前沒有可刪除的使用者。")
+            elif confirm_name != delete_user:
+                st.warning("確認名稱不一致，未刪除。")
+            else:
+                delete_person_data(delete_user)
+                st.success(f"已刪除 {delete_user} 與所有資料。")
+                st.rerun()
+        st.stop()
+
+    if not people:
+        st.info("目前還沒有使用者資料。")
+        st.stop()
+    return st.sidebar.selectbox("查看使用者", people)
+
+
 def app() -> None:
     st.set_page_config(page_title="個人健康管理", layout="centered")
     apply_ui_style()
     authenticated_person = require_login()
     init_db()
-    if authenticated_person:
+    if st.session_state.get("is_admin"):
+        selected_person = admin_panel()
+    elif authenticated_person:
         add_person(authenticated_person)
         selected_person = authenticated_person
     else:
