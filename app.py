@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import os
 import sqlite3
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -101,6 +103,16 @@ def get_app_password() -> str:
     return os.environ.get("APP_PASSWORD", "")
 
 
+def get_invite_code() -> str:
+    try:
+        invite_code = st.secrets.get("INVITE_CODE", "")
+    except Exception:
+        invite_code = ""
+    if invite_code:
+        return str(invite_code)
+    return os.environ.get("INVITE_CODE", "")
+
+
 def get_user_passwords() -> dict[str, str]:
     try:
         users = st.secrets.get("users", {})
@@ -111,11 +123,68 @@ def get_user_passwords() -> dict[str, str]:
     return {str(username): str(password) for username, password in dict(users).items()}
 
 
+def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
+    password_salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        password_salt.encode("utf-8"),
+        200_000,
+    ).hex()
+    return password_salt, digest
+
+
+def create_account(person_name: str, password: str) -> None:
+    salt, password_hash = hash_password(password)
+    now = datetime.now().isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_users (person_name, password_salt, password_hash, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (person_name, salt, password_hash, now),
+        )
+    add_person(person_name)
+
+
+def account_exists(person_name: str) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM app_users WHERE person_name = ?",
+            (person_name,),
+        ).fetchone()
+    return row is not None
+
+
+def registered_usernames() -> list[str]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT person_name FROM app_users ORDER BY person_name"
+        ).fetchall()
+    return [row["person_name"] for row in rows]
+
+
+def verify_account(person_name: str, password: str) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT password_salt, password_hash FROM app_users WHERE person_name = ?",
+            (person_name,),
+        ).fetchone()
+    if not row:
+        return False
+    _, digest = hash_password(password, row["password_salt"])
+    return hmac.compare_digest(digest, row["password_hash"])
+
+
 def require_login() -> str | None:
+    init_db()
     user_passwords = get_user_passwords()
+    registered_users = registered_usernames()
     password = get_app_password()
-    if not user_passwords and not password:
-        st.error("尚未設定登入密碼。請先在 Streamlit Secrets 加上 [users] 或 APP_PASSWORD。")
+    invite_code = get_invite_code()
+    if not registered_users and not user_passwords and not password and not invite_code:
+        st.error("尚未設定登入方式。請先在 Streamlit Secrets 加上 INVITE_CODE。")
         st.stop()
 
     if st.session_state.get("authenticated"):
@@ -131,28 +200,66 @@ def require_login() -> str | None:
 
     st.title("家庭健康管理")
     st.caption("請先登入。")
-    with st.form("login_form"):
-        selected_user = None
-        if user_passwords:
-            selected_user = st.selectbox("使用者", list(user_passwords.keys()))
-        entered_password = st.text_input("密碼", type="password")
-        submitted = st.form_submit_button("登入", use_container_width=True)
+    login_tab, register_tab = st.tabs(["登入", "註冊"])
 
-    if submitted:
-        if user_passwords:
-            expected_password = user_passwords.get(selected_user or "", "")
-            if hmac.compare_digest(entered_password, expected_password):
+    with login_tab:
+        with st.form("login_form"):
+            available_users = sorted(set(registered_users) | set(user_passwords.keys()))
+            selected_user = None
+            if available_users:
+                selected_user = st.selectbox("使用者", available_users)
+            entered_password = st.text_input("密碼", type="password")
+            submitted = st.form_submit_button("登入", use_container_width=True)
+
+        if submitted:
+            if selected_user and verify_account(selected_user, entered_password):
                 st.session_state["authenticated"] = True
                 st.session_state["authenticated_person"] = selected_user
                 add_person(selected_user or "")
                 st.rerun()
+            elif user_passwords:
+                expected_password = user_passwords.get(selected_user or "", "")
+                if hmac.compare_digest(entered_password, expected_password):
+                    st.session_state["authenticated"] = True
+                    st.session_state["authenticated_person"] = selected_user
+                    add_person(selected_user or "")
+                    st.rerun()
+                else:
+                    st.error("使用者或密碼不正確。")
+            elif password and hmac.compare_digest(entered_password, password):
+                st.session_state["authenticated"] = True
+                st.rerun()
             else:
                 st.error("使用者或密碼不正確。")
-        elif hmac.compare_digest(entered_password, password):
-            st.session_state["authenticated"] = True
-            st.rerun()
+
+    with register_tab:
+        if not invite_code:
+            st.info("尚未開放自助註冊。請請管理者在 Secrets 設定 INVITE_CODE。")
         else:
-            st.error("密碼不正確。")
+            with st.form("register_form"):
+                new_user = st.text_input("使用者名稱", placeholder="例：爸爸、媽媽、Ashley")
+                new_password = st.text_input("設定密碼", type="password")
+                confirm_password = st.text_input("再次輸入密碼", type="password")
+                entered_invite = st.text_input("邀請碼", type="password")
+                register_submitted = st.form_submit_button("建立帳號", use_container_width=True)
+
+            if register_submitted:
+                cleaned_user = new_user.strip()
+                if not cleaned_user:
+                    st.warning("請輸入使用者名稱。")
+                elif cleaned_user == DEFAULT_PERSON:
+                    st.warning("請輸入實際名字或稱呼，避免大家都用「我」。")
+                elif account_exists(cleaned_user):
+                    st.warning("這個使用者已經存在，請直接登入。")
+                elif len(new_password) < 4:
+                    st.warning("密碼至少需要 4 個字元。")
+                elif new_password != confirm_password:
+                    st.warning("兩次密碼不一致。")
+                elif not hmac.compare_digest(entered_invite, invite_code):
+                    st.warning("邀請碼不正確。")
+                else:
+                    create_account(cleaned_user, new_password)
+                    st.success("帳號已建立，現在可以登入。")
     st.stop()
 
 
@@ -173,6 +280,16 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS people (
             person_name TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_users (
+            person_name TEXT PRIMARY KEY,
+            password_salt TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
         """
