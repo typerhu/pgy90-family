@@ -1847,13 +1847,19 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 st.rerun()
 
     with photo_tab:
-        photo_source = st.radio("照片來源", ["拍照", "上傳照片"], horizontal=True)
+        photo_source = st.radio("照片來源", ["上傳照片", "拍照"], horizontal=True)
         captured_photo = None
         uploaded_photo = None
-        if photo_source == "拍照":
-            captured_photo = st.camera_input("拍一張餐食照片")
-        else:
+        if photo_source == "上傳照片":
             uploaded_photo = st.file_uploader("上傳餐食照片", type=["jpg", "jpeg", "png", "webp"])
+            st.session_state["meal_camera_enabled"] = False
+        else:
+            if not st.session_state.get("meal_camera_enabled"):
+                if st.button("啟用相機", use_container_width=True):
+                    st.session_state["meal_camera_enabled"] = True
+                    st.rerun()
+            if st.session_state.get("meal_camera_enabled"):
+                captured_photo = st.camera_input("拍一張餐食照片")
 
         photo_meal_type = st.selectbox(
             "餐別",
