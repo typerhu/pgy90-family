@@ -1056,7 +1056,7 @@ def default_targets(weight_kg: float, goal: str) -> tuple[int, int, int]:
 def recommended_body_targets(height_cm: float, body_shape_goal: str) -> dict[str, float]:
     height_m = height_cm / 100
     if body_shape_goal == "精實有線條":
-        bmi_target = 22.0
+        bmi_target = 21.5
         body_fat_min = 13.0
         body_fat_max = 16.0
     elif body_shape_goal == "增肌維持":
@@ -1064,7 +1064,7 @@ def recommended_body_targets(height_cm: float, body_shape_goal: str) -> dict[str
         body_fat_min = 15.0
         body_fat_max = 20.0
     else:
-        bmi_target = 22.0
+        bmi_target = 22.5
         body_fat_min = 15.0
         body_fat_max = 18.0
 
