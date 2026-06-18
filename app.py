@@ -1971,6 +1971,32 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
         current_preferences = "高蛋白、少油炸、外食可執行、亞洲食物優先"
 
     with st.expander("個人目標與飲食偏好", expanded=profile is None):
+        height_cm = st.number_input(
+            "身高 cm",
+            min_value=100.0,
+            max_value=230.0,
+            value=float(current_height),
+            step=0.5,
+            format="%.1f",
+            width=120,
+            key=f"profile_height_{person_name}",
+        )
+        body_shape_goal = st.selectbox("體態方向", BODY_SHAPE_GOALS, key=f"body_shape_goal_{person_name}")
+        recommended_targets = recommended_body_targets(height_cm, body_shape_goal)
+        st.caption(
+            "建議："
+            f"目標體重 {compact_number(recommended_targets['target_weight_kg'])} kg；"
+            f"體脂 {compact_number(recommended_targets['target_body_fat_min'])}-"
+            f"{compact_number(recommended_targets['target_body_fat_max'])}%；"
+            f"健康體重範圍 {compact_number(recommended_targets['healthy_weight_min'])}-"
+            f"{compact_number(recommended_targets['healthy_weight_max'])} kg"
+        )
+        if st.button("套用建議值", use_container_width=True):
+            st.session_state[f"target_weight_{person_name}"] = recommended_targets["target_weight_kg"]
+            st.session_state[f"target_body_fat_min_{person_name}"] = recommended_targets["target_body_fat_min"]
+            st.session_state[f"target_body_fat_max_{person_name}"] = recommended_targets["target_body_fat_max"]
+            st.rerun()
+
         with st.form("coach_profile_form"):
             goal = st.selectbox(
                 "目前目標",
@@ -1988,30 +2014,6 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             )
             if average_week_weight is not None:
                 st.caption(f"最近 7 天平均：{compact_number(average_week_weight)} kg")
-            height_cm = st.number_input(
-                "身高 cm",
-                min_value=100.0,
-                max_value=230.0,
-                value=float(current_height),
-                step=0.5,
-                format="%.1f",
-                width=120,
-            )
-            body_shape_goal = st.selectbox("體態方向", BODY_SHAPE_GOALS)
-            recommended_targets = recommended_body_targets(height_cm, body_shape_goal)
-            st.caption(
-                "建議："
-                f"目標體重 {compact_number(recommended_targets['target_weight_kg'])} kg；"
-                f"體脂 {compact_number(recommended_targets['target_body_fat_min'])}-"
-                f"{compact_number(recommended_targets['target_body_fat_max'])}%；"
-                f"健康體重範圍 {compact_number(recommended_targets['healthy_weight_min'])}-"
-                f"{compact_number(recommended_targets['healthy_weight_max'])} kg"
-            )
-            if st.form_submit_button("套用建議值", use_container_width=True):
-                st.session_state[f"target_weight_{person_name}"] = recommended_targets["target_weight_kg"]
-                st.session_state[f"target_body_fat_min_{person_name}"] = recommended_targets["target_body_fat_min"]
-                st.session_state[f"target_body_fat_max_{person_name}"] = recommended_targets["target_body_fat_max"]
-                st.rerun()
             target_weight = st.number_input(
                 "目標體重 kg",
                 min_value=30.0,
