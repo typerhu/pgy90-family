@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
 import hmac
 import hashlib
+import json
 import os
 import sqlite3
 import re
 import secrets
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -134,6 +138,26 @@ def get_admin_passwords() -> dict[str, str]:
     if not admins:
         return {}
     return {str(username): str(password) for username, password in dict(admins).items()}
+
+
+def get_openai_api_key() -> str:
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        api_key = ""
+    if api_key:
+        return str(api_key)
+    return os.environ.get("OPENAI_API_KEY", "")
+
+
+def get_openai_model() -> str:
+    try:
+        model = st.secrets.get("OPENAI_MODEL", "")
+    except Exception:
+        model = ""
+    if model:
+        return str(model)
+    return os.environ.get("OPENAI_MODEL", "gpt-5.5")
 
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
@@ -921,6 +945,97 @@ def estimate_nutrition(description: str) -> dict:
     }
 
 
+def extract_response_text(response: dict) -> str:
+    if response.get("output_text"):
+        return str(response["output_text"])
+
+    parts = []
+    for output_item in response.get("output", []):
+        for content_item in output_item.get("content", []):
+            text = content_item.get("text")
+            if text:
+                parts.append(str(text))
+    return "\n".join(parts).strip()
+
+
+def parse_meal_photo_result(raw_text: str) -> dict:
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    data = json.loads(cleaned)
+    return {
+        "description": str(data.get("description") or "照片餐食"),
+        "meal_type": str(data.get("meal_type") or "點心"),
+        "calories": int(round(float(data.get("calories") or 0))),
+        "protein_g": round(float(data.get("protein_g") or 0), 1),
+        "fiber_g": round(float(data.get("fiber_g") or 0), 1),
+        "carbs_g": round(float(data.get("carbs_g") or 0), 1),
+        "fat_g": round(float(data.get("fat_g") or 0), 1),
+        "confidence": str(data.get("confidence") or "低"),
+        "matched": str(data.get("matched") or data.get("description") or "照片辨識"),
+    }
+
+
+def analyze_meal_photo(image_bytes: bytes, mime_type: str, meal_type_override: str) -> dict:
+    api_key = get_openai_api_key()
+    if not api_key:
+        raise RuntimeError("尚未設定 OPENAI_API_KEY。")
+
+    image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+    prompt = """
+你是家庭健康管理 App 的飲食紀錄助手。請根據照片辨識餐點並估算營養。
+請只回傳 JSON，不要加 Markdown。欄位：
+description: 繁體中文餐食描述，包含可見份量推測
+meal_type: 早餐、午餐、晚餐、點心之一
+calories: 整數 kcal
+protein_g, fiber_g, carbs_g, fat_g: 數字
+confidence: 高、中、低之一
+matched: 簡短說明辨識到的主要食物；如果不確定，說明不確定原因
+營養只是估算；看不清楚或份量不確定時請保守估算並降低 confidence。
+"""
+    if meal_type_override != "自動判斷":
+        prompt += f"\n使用者指定餐別為「{meal_type_override}」，meal_type 請使用這個值。"
+
+    request_body = {
+        "model": get_openai_model(),
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_image", "image_url": image_url, "detail": "low"},
+                ],
+            }
+        ],
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"照片辨識失敗：{details}") from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"照片辨識連線失敗：{error.reason}") from error
+
+    result = parse_meal_photo_result(extract_response_text(response_data))
+    if meal_type_override != "自動判斷":
+        result["meal_type"] = meal_type_override
+    if result["meal_type"] not in MEAL_TYPES:
+        result["meal_type"] = "點心"
+    return result
+
+
 def save_meal_log(values: dict) -> None:
     with connect() as conn:
         conn.execute(
@@ -1660,42 +1775,98 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     for item in coach_feedback(totals, profile):
         st.info(item)
 
-    with st.form("chat_food_form"):
-        text = st.text_area(
-            "用一句話記錄飲食",
-            placeholder="例：午餐吃海南雞飯加一顆蛋，喝無糖拿鐵",
-            height=110,
-        )
-        meal_type_override = st.selectbox("餐別", ["自動判斷", "早餐", "午餐", "晚餐", "點心"])
-        submitted = st.form_submit_button("估算並加入今日紀錄", use_container_width=True)
+    text_tab, photo_tab = st.tabs(["文字輸入", "照片輸入"])
 
-    if submitted:
-        cleaned = text.strip()
-        if not cleaned:
-            st.warning("先輸入一段飲食內容。")
+    with text_tab:
+        with st.form("chat_food_form"):
+            text = st.text_area(
+                "用一句話記錄飲食",
+                placeholder="例：午餐吃海南雞飯加一顆蛋，喝無糖拿鐵",
+                height=110,
+            )
+            meal_type_override = st.selectbox("餐別", ["自動判斷", "早餐", "午餐", "晚餐", "點心"])
+            submitted = st.form_submit_button("估算並加入今日紀錄", use_container_width=True)
+
+        if submitted:
+            cleaned = text.strip()
+            if not cleaned:
+                st.warning("先輸入一段飲食內容。")
+            else:
+                estimate = estimate_nutrition(cleaned)
+                meal_type = detect_meal_type(cleaned) if meal_type_override == "自動判斷" else meal_type_override
+                save_meal_log(
+                    {
+                        "person_name": person_name,
+                        "log_date": selected_date.isoformat(),
+                        "meal_type": meal_type,
+                        "description": cleaned,
+                        "calories": estimate["calories"],
+                        "protein_g": estimate["protein_g"],
+                        "fiber_g": estimate["fiber_g"],
+                        "carbs_g": estimate["carbs_g"],
+                        "fat_g": estimate["fat_g"],
+                        "confidence": estimate["confidence"],
+                    }
+                )
+                st.success(
+                    "已加入："
+                    f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
+                    f"纖維 {estimate['fiber_g']} g。辨識：{estimate['matched']}。"
+                )
+                st.rerun()
+
+    with photo_tab:
+        photo_source = st.radio("照片來源", ["拍照", "上傳照片"], horizontal=True)
+        captured_photo = None
+        uploaded_photo = None
+        if photo_source == "拍照":
+            captured_photo = st.camera_input("拍一張餐食照片")
         else:
-            estimate = estimate_nutrition(cleaned)
-            meal_type = detect_meal_type(cleaned) if meal_type_override == "自動判斷" else meal_type_override
-            save_meal_log(
-                {
-                    "person_name": person_name,
-                    "log_date": selected_date.isoformat(),
-                    "meal_type": meal_type,
-                    "description": cleaned,
-                    "calories": estimate["calories"],
-                    "protein_g": estimate["protein_g"],
-                    "fiber_g": estimate["fiber_g"],
-                    "carbs_g": estimate["carbs_g"],
-                    "fat_g": estimate["fat_g"],
-                    "confidence": estimate["confidence"],
-                }
-            )
-            st.success(
-                "已加入："
-                f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
-                f"纖維 {estimate['fiber_g']} g。辨識：{estimate['matched']}。"
-            )
-            st.rerun()
+            uploaded_photo = st.file_uploader("上傳餐食照片", type=["jpg", "jpeg", "png", "webp"])
+
+        photo_meal_type = st.selectbox(
+            "餐別",
+            ["自動判斷", "早餐", "午餐", "晚餐", "點心"],
+            key="photo_meal_type",
+        )
+        photo_file = captured_photo or uploaded_photo
+        if st.button("辨識並加入今日紀錄", use_container_width=True):
+            if photo_file is None:
+                st.warning("先拍照或上傳一張餐食照片。")
+            elif not get_openai_api_key():
+                st.warning("尚未設定 OPENAI_API_KEY，請先在 Streamlit Secrets 加入 OpenAI API key。")
+            else:
+                try:
+                    with st.spinner("正在辨識餐食照片..."):
+                        estimate = analyze_meal_photo(
+                            photo_file.getvalue(),
+                            photo_file.type or "image/jpeg",
+                            photo_meal_type,
+                        )
+                    save_meal_log(
+                        {
+                            "person_name": person_name,
+                            "log_date": selected_date.isoformat(),
+                            "meal_type": estimate["meal_type"],
+                            "description": estimate["description"],
+                            "calories": estimate["calories"],
+                            "protein_g": estimate["protein_g"],
+                            "fiber_g": estimate["fiber_g"],
+                            "carbs_g": estimate["carbs_g"],
+                            "fat_g": estimate["fat_g"],
+                            "confidence": estimate["confidence"],
+                        }
+                    )
+                    st.success(
+                        "已加入："
+                        f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
+                        f"纖維 {estimate['fiber_g']} g。辨識：{estimate['matched']}。"
+                    )
+                    st.rerun()
+                except json.JSONDecodeError:
+                    st.error("照片辨識回傳格式不完整，請換一張更清楚的照片或改用文字輸入。")
+                except RuntimeError as error:
+                    st.error(str(error))
 
     st.markdown("#### 今日餐食")
     if meals.empty:
