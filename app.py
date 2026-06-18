@@ -386,6 +386,24 @@ def add_person(person_name: str) -> None:
         )
 
 
+def person_has_data(person_name: str) -> bool:
+    with connect() as conn:
+        checks = [
+            ("daily_logs", "person_name = ?"),
+            ("meal_logs", "person_name = ?"),
+            ("weekly_reports", "person_name = ?"),
+            ("coach_profiles", "person_name = ?"),
+        ]
+        for table_name, where_clause in checks:
+            count = conn.execute(
+                f"SELECT COUNT(*) AS total FROM {table_name} WHERE {where_clause}",
+                (person_name,),
+            ).fetchone()["total"]
+            if count:
+                return True
+    return False
+
+
 def get_daily_log(person_name: str, log_date: date) -> sqlite3.Row | None:
     with connect() as conn:
         return conn.execute(
@@ -1476,9 +1494,30 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
 
 
 def person_selector() -> str:
-    people = load_people()
+    people = [
+        person
+        for person in load_people()
+        if person != DEFAULT_PERSON or person_has_data(person)
+    ]
     with st.sidebar:
         st.markdown("### 使用者")
+        if not people:
+            st.info("請先新增第一位家人，再開始記錄。")
+            with st.form("first_person_form"):
+                first_person = st.text_input("家人名稱", placeholder="例：爸爸、媽媽、Ashley")
+                submitted = st.form_submit_button("新增使用者", use_container_width=True)
+            if submitted:
+                cleaned = first_person.strip()
+                if not cleaned:
+                    st.warning("請輸入名稱。")
+                elif cleaned == DEFAULT_PERSON:
+                    st.warning("請輸入實際名字或稱呼，避免大家都用「我」。")
+                else:
+                    add_person(cleaned)
+                    st.success(f"已新增 {cleaned}。")
+                    st.rerun()
+            st.stop()
+
         selected = st.selectbox("目前記錄", people)
         with st.expander("新增家人"):
             with st.form("add_person_form"):
@@ -1488,6 +1527,8 @@ def person_selector() -> str:
                 cleaned = new_person.strip()
                 if not cleaned:
                     st.warning("請輸入名稱。")
+                elif cleaned == DEFAULT_PERSON:
+                    st.warning("請輸入實際名字或稱呼，避免大家都用「我」。")
                 else:
                     add_person(cleaned)
                     st.success(f"已新增 {cleaned}。")
