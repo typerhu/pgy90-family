@@ -31,6 +31,7 @@ UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
 REMEMBER_DAYS = 30
 REMEMBER_DISABLED_KEY = "remember_login_disabled"
+REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
 
 
 # Constants / Defaults
@@ -300,6 +301,15 @@ def clear_remember_cookie() -> None:
     get_cookie_manager().delete(cookie=REMEMBER_COOKIE_NAME)
 
 
+def request_logout() -> None:
+    st.session_state["authenticated"] = False
+    st.session_state[REMEMBER_DISABLED_KEY] = True
+    st.session_state[REMEMBER_CLEAR_PENDING_KEY] = True
+    st.session_state.pop("authenticated_person", None)
+    st.session_state.pop("is_admin", None)
+    st.session_state.pop("remember_token_to_set", None)
+
+
 def finish_login(person_name: str | None, is_admin: bool, remember_me: bool) -> None:
     st.session_state["authenticated"] = True
     st.session_state["is_admin"] = is_admin
@@ -469,6 +479,9 @@ def require_login() -> str | None:
         st.error("尚未設定登入方式。請先在 Streamlit Secrets 加上 INVITE_CODE 或 [admins]。")
         st.stop()
 
+    if st.session_state.pop(REMEMBER_CLEAR_PENDING_KEY, False):
+        clear_remember_cookie()
+
     apply_remembered_login()
 
     if st.session_state.get("authenticated"):
@@ -481,14 +494,7 @@ def require_login() -> str | None:
                 st.markdown(f"### {current_user}")
             if st.session_state.get("is_admin"):
                 st.caption("管理員模式")
-            if st.button("登出", use_container_width=True):
-                clear_remember_cookie()
-                st.session_state["authenticated"] = False
-                st.session_state[REMEMBER_DISABLED_KEY] = True
-                st.session_state.pop("authenticated_person", None)
-                st.session_state.pop("is_admin", None)
-                st.session_state.pop("remember_token_to_set", None)
-                st.rerun()
+            st.button("登出", use_container_width=True, on_click=request_logout)
         return st.session_state.get("authenticated_person")
 
     st.title("家庭健康管理")
