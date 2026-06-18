@@ -672,6 +672,9 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
             person_name TEXT PRIMARY KEY,
             goal TEXT NOT NULL,
             height_cm REAL,
+            target_weight_kg REAL,
+            target_body_fat_min REAL,
+            target_body_fat_max REAL,
             current_weight_kg REAL,
             daily_calorie_target INTEGER,
             protein_target_g INTEGER,
@@ -684,20 +687,30 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
     coach_profile_columns = table_columns(conn, "coach_profiles")
     if "height_cm" not in coach_profile_columns:
         conn.execute("ALTER TABLE coach_profiles ADD COLUMN height_cm REAL")
+    if "target_weight_kg" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN target_weight_kg REAL")
+    if "target_body_fat_min" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN target_body_fat_min REAL")
+    if "target_body_fat_max" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN target_body_fat_max REAL")
 
     old_profile = conn.execute("SELECT * FROM coach_profile WHERE id = 1").fetchone()
     if old_profile:
         conn.execute(
             """
             INSERT OR IGNORE INTO coach_profiles (
-                person_name, goal, height_cm, current_weight_kg, daily_calorie_target,
+                person_name, goal, height_cm, target_weight_kg, target_body_fat_min,
+                target_body_fat_max, current_weight_kg, daily_calorie_target,
                 protein_target_g, fiber_target_g, preferences, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 DEFAULT_PERSON,
                 old_profile["goal"],
                 PROFILE["height_cm"],
+                PROFILE["target_weight_kg"],
+                PROFILE["target_body_fat_min"],
+                PROFILE["target_body_fat_max"],
                 old_profile["current_weight_kg"],
                 old_profile["daily_calorie_target"],
                 old_profile["protein_target_g"],
@@ -950,18 +963,38 @@ def get_person_height_cm(person_name: str) -> float:
     return float(profile["height_cm"] or PROFILE["height_cm"])
 
 
+def get_person_targets(person_name: str) -> dict[str, float]:
+    profile = get_coach_profile(person_name)
+    if profile is None:
+        return {
+            "target_weight_kg": float(PROFILE["target_weight_kg"]),
+            "target_body_fat_min": float(PROFILE["target_body_fat_min"]),
+            "target_body_fat_max": float(PROFILE["target_body_fat_max"]),
+        }
+    return {
+        "target_weight_kg": float(profile["target_weight_kg"] or PROFILE["target_weight_kg"]),
+        "target_body_fat_min": float(profile["target_body_fat_min"] or PROFILE["target_body_fat_min"]),
+        "target_body_fat_max": float(profile["target_body_fat_max"] or PROFILE["target_body_fat_max"]),
+    }
+
+
 def save_coach_profile(person_name: str, values: dict) -> None:
     with connect() as conn:
         conn.execute(
             """
             INSERT INTO coach_profiles (
-                person_name, goal, height_cm, current_weight_kg, daily_calorie_target,
+                person_name, goal, height_cm, target_weight_kg, target_body_fat_min,
+                target_body_fat_max, current_weight_kg, daily_calorie_target,
                 protein_target_g, fiber_target_g, preferences, updated_at
-            ) VALUES (:person_name, :goal, :height_cm, :current_weight_kg, :daily_calorie_target,
+            ) VALUES (:person_name, :goal, :height_cm, :target_weight_kg, :target_body_fat_min,
+                :target_body_fat_max, :current_weight_kg, :daily_calorie_target,
                 :protein_target_g, :fiber_target_g, :preferences, :updated_at)
             ON CONFLICT(person_name) DO UPDATE SET
                 goal = excluded.goal,
                 height_cm = excluded.height_cm,
+                target_weight_kg = excluded.target_weight_kg,
+                target_body_fat_min = excluded.target_body_fat_min,
+                target_body_fat_max = excluded.target_body_fat_max,
                 current_weight_kg = excluded.current_weight_kg,
                 daily_calorie_target = excluded.daily_calorie_target,
                 protein_target_g = excluded.protein_target_g,
@@ -1377,7 +1410,7 @@ def apply_ui_style() -> None:
     )
 
 
-def generate_weekly_summary(week_df: pd.DataFrame, window: WeekWindow) -> str:
+def generate_weekly_summary(week_df: pd.DataFrame, window: WeekWindow, targets: dict[str, float]) -> str:
     if week_df.empty:
         return (
             f"{window.start.isoformat()} 至 {window.end.isoformat()} 尚無紀錄。"
@@ -1400,7 +1433,7 @@ def generate_weekly_summary(week_df: pd.DataFrame, window: WeekWindow) -> str:
 
     weight_gap = None
     if pd.notna(latest.get("weight_kg")):
-        weight_gap = latest["weight_kg"] - PROFILE["target_weight_kg"]
+        weight_gap = latest["weight_kg"] - targets["target_weight_kg"]
 
     highlights = [
         f"本週記錄 {recorded_days} 天。",
@@ -1414,15 +1447,26 @@ def generate_weekly_summary(week_df: pd.DataFrame, window: WeekWindow) -> str:
     recommendations = []
     if weight_gap is not None:
         if weight_gap > 2:
-            recommendations.append("體重仍高於 75kg 目標，先維持高蛋白、減少高油甜與應酬頻率。")
+            recommendations.append(
+                f"體重仍高於 {compact_number(targets['target_weight_kg'])}kg 目標，"
+                "先維持高蛋白、減少高油甜與應酬頻率。"
+            )
         elif weight_gap < -1:
             recommendations.append("體重已低於目標附近，建議確認精神、訓練表現與恢復狀態。")
         else:
-            recommendations.append("體重接近 75kg 目標，可把注意力轉到腰圍、睡眠和訓練穩定度。")
+            recommendations.append(
+                f"體重接近 {compact_number(targets['target_weight_kg'])}kg 目標，"
+                "可把注意力轉到腰圍、睡眠和訓練穩定度。"
+            )
     if pd.notna(body_fat_avg):
-        if body_fat_avg > PROFILE["target_body_fat_max"]:
-            recommendations.append("體脂仍高於 13-15% 目標區間，建議下週增加 1-2 次低強度活動。")
-        elif PROFILE["target_body_fat_min"] <= body_fat_avg <= PROFILE["target_body_fat_max"]:
+        if body_fat_avg > targets["target_body_fat_max"]:
+            recommendations.append(
+                "體脂仍高於 "
+                f"{compact_number(targets['target_body_fat_min'])}-"
+                f"{compact_number(targets['target_body_fat_max'])}% 目標區間，"
+                "建議下週增加 1-2 次低強度活動。"
+            )
+        elif targets["target_body_fat_min"] <= body_fat_avg <= targets["target_body_fat_max"]:
             recommendations.append("體脂落在目標區間，維持即可，避免過度節食。")
     if pd.notna(sleep_avg) and sleep_avg < 7:
         recommendations.append("睡眠平均低於 7 小時，恢復可能是下週最值得優先改善的指標。")
@@ -1819,6 +1863,7 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
     selected = st.date_input("選擇週內任一天", value=date.today(), key="weekly_date")
     window = week_window(selected)
     st.caption(f"週期：{window.start.isoformat()} 至 {window.end.isoformat()}")
+    targets = get_person_targets(person_name)
 
     if df.empty:
         week_df = df
@@ -1828,7 +1873,7 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
             & (df["log_date"].dt.date <= window.end)
         ]
 
-    summary = generate_weekly_summary(week_df, window)
+    summary = generate_weekly_summary(week_df, window, targets)
     saved = get_saved_report(person_name, window)
 
     if st.button("產生 / 更新本週總結", use_container_width=True):
@@ -1860,6 +1905,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     profile = get_coach_profile(person_name)
     current_weight = latest_weight(df)
     current_height = float(PROFILE["height_cm"])
+    targets = get_person_targets(person_name)
     default_calories, default_protein, default_fiber = default_targets(current_weight, "減脂")
 
     if profile is not None:
@@ -1899,6 +1945,33 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 format="%.1f",
                 width=120,
             )
+            target_weight = st.number_input(
+                "目標體重 kg",
+                min_value=30.0,
+                max_value=180.0,
+                value=float(targets["target_weight_kg"]),
+                step=0.1,
+                format="%.1f",
+                width=120,
+            )
+            target_body_fat_min = st.number_input(
+                "目標體脂下限 %",
+                min_value=3.0,
+                max_value=45.0,
+                value=float(targets["target_body_fat_min"]),
+                step=0.5,
+                format="%.1f",
+                width=120,
+            )
+            target_body_fat_max = st.number_input(
+                "目標體脂上限 %",
+                min_value=3.0,
+                max_value=45.0,
+                value=max(float(targets["target_body_fat_max"]), float(target_body_fat_min)),
+                step=0.5,
+                format="%.1f",
+                width=120,
+            )
             suggested_calories, suggested_protein, suggested_fiber = default_targets(weight, goal)
             calorie_target = st.number_input(
                 "每日熱量目標 kcal",
@@ -1930,11 +2003,17 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 height=90,
             )
             if st.form_submit_button("儲存偏好", use_container_width=True):
+                if target_body_fat_min > target_body_fat_max:
+                    st.warning("目標體脂下限不能高於上限。")
+                    st.stop()
                 save_coach_profile(
                     person_name,
                     {
                         "goal": goal,
                         "height_cm": height_cm,
+                        "target_weight_kg": target_weight,
+                        "target_body_fat_min": target_body_fat_min,
+                        "target_body_fat_max": target_body_fat_max,
                         "current_weight_kg": weight,
                         "daily_calorie_target": calorie_target,
                         "protein_target_g": protein_target,
@@ -2336,12 +2415,14 @@ def app() -> None:
     st.caption(f"目前查看：{selected_person}")
 
     height_cm = get_person_height_cm(selected_person)
+    targets = get_person_targets(selected_person)
     df = load_logs(selected_person)
     metric_cards(df, height_cm)
 
     st.markdown(
-        f"目標：{PROFILE['target_weight_kg']} kg，體脂 "
-        f"{PROFILE['target_body_fat_min']}-{PROFILE['target_body_fat_max']}%。"
+        f"目標：{compact_number(targets['target_weight_kg'])} kg，體脂 "
+        f"{compact_number(targets['target_body_fat_min'])}-"
+        f"{compact_number(targets['target_body_fat_max'])}%。"
     )
 
     tab_coach, tab_daily, tab_trends, tab_weekly = st.tabs(
