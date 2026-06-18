@@ -20,6 +20,8 @@ import extra_streamlit_components as stx
 import streamlit as st
 
 
+# Imports / Config
+
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR / "data"
 DB_PATH = DATA_DIR / "health.db"
@@ -28,6 +30,10 @@ APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
 REMEMBER_DAYS = 30
+REMEMBER_DISABLED_KEY = "remember_login_disabled"
+
+
+# Constants / Defaults
 
 PROFILE = {
     "height_cm": 181,
@@ -115,6 +121,8 @@ class WeekWindow:
     start: date
     end: date
 
+
+# Authentication and secrets
 
 def get_app_password() -> str:
     try:
@@ -266,6 +274,8 @@ def get_remember_cookie() -> str:
 def apply_remembered_login() -> None:
     if st.session_state.get("authenticated"):
         return
+    if st.session_state.get(REMEMBER_DISABLED_KEY):
+        return
     token = get_remember_cookie()
     remembered = parse_remember_token(token)
     if remembered is None:
@@ -293,6 +303,7 @@ def clear_remember_cookie() -> None:
 def finish_login(person_name: str | None, is_admin: bool, remember_me: bool) -> None:
     st.session_state["authenticated"] = True
     st.session_state["is_admin"] = is_admin
+    st.session_state.pop(REMEMBER_DISABLED_KEY, None)
     if person_name:
         st.session_state["authenticated_person"] = person_name
     if remember_me and person_name:
@@ -471,10 +482,12 @@ def require_login() -> str | None:
             if st.session_state.get("is_admin"):
                 st.caption("管理員模式")
             if st.button("登出", use_container_width=True):
+                clear_remember_cookie()
                 st.session_state["authenticated"] = False
+                st.session_state[REMEMBER_DISABLED_KEY] = True
                 st.session_state.pop("authenticated_person", None)
                 st.session_state.pop("is_admin", None)
-                clear_remember_cookie()
+                st.session_state.pop("remember_token_to_set", None)
                 st.rerun()
         return st.session_state.get("authenticated_person")
 
@@ -546,6 +559,8 @@ def require_login() -> str | None:
     st.stop()
 
 
+# Database setup
+
 def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -556,6 +571,8 @@ def connect() -> sqlite3.Connection:
 def table_columns(conn: sqlite3.Connection, table_name: str) -> list[str]:
     return [row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")]
 
+
+# Schema migration
 
 def ensure_family_schema(conn: sqlite3.Connection) -> None:
     now = datetime.now().isoformat(timespec="seconds")
@@ -812,6 +829,8 @@ def init_db() -> None:
         )
         ensure_family_schema(conn)
 
+
+# User / profile functions and daily health logs
 
 def load_people() -> list[str]:
     with connect() as conn:
@@ -1081,6 +1100,8 @@ def recommended_body_targets(height_cm: float, body_shape_goal: str) -> dict[str
     }
 
 
+# Local nutrition estimates and AI estimation
+
 def meal_type_by_local_time(now: datetime | None = None) -> str:
     local_now = now or datetime.now(APP_TIMEZONE)
     if local_now.tzinfo is None:
@@ -1313,6 +1334,8 @@ matched: 簡短說明辨識到的主要食物；如果不確定，說明不確�
     return result
 
 
+# Meal logging
+
 def save_meal_log(values: dict) -> None:
     with connect() as conn:
         conn.execute(
@@ -1403,6 +1426,8 @@ def coach_feedback(totals: dict, profile: sqlite3.Row | None) -> list[str]:
     return feedback
 
 
+# Reports
+
 def week_window(selected: date) -> WeekWindow:
     start = selected - timedelta(days=selected.weekday())
     return WeekWindow(start=start, end=start + timedelta(days=6))
@@ -1430,6 +1455,8 @@ def split_sleep_time(total_hours: float | None) -> tuple[int, int]:
     total_minutes = int(round(float(total_hours) * 60))
     return total_minutes // 60, total_minutes % 60
 
+
+# UI helpers
 
 def apply_ui_style() -> None:
     st.markdown(
@@ -1602,6 +1629,8 @@ def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
         hide_index=True,
     )
 
+
+# UI pages
 
 def daily_input_page(person_name: str) -> None:
     st.subheader(f"{person_name}｜每日輸入")
@@ -2373,6 +2402,8 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             st.line_chart(daily.set_index("log_date"), height=260)
 
 
+# Admin tools and person selection
+
 def person_selector() -> str:
     people = [
         person
@@ -2472,6 +2503,8 @@ def admin_panel() -> str | None:
         st.stop()
     return st.sidebar.selectbox("查看使用者", people)
 
+
+# Main app flow
 
 def app() -> None:
     st.set_page_config(page_title="個人健康管理", layout="centered")

@@ -1,31 +1,44 @@
-# 家庭健康管理 Web App
+# PGY90 Health Coach / teofamilyhealth
 
-這是一個使用 Python、Streamlit、SQLite 製作的家庭健康管理工具。它可以讓家人共用同一個 App，並把每個人的體重、體脂、腰圍、睡眠、飲食、運動、復健與備註分開記錄。
+這是一個給家人使用的健康管理 Web App。目前真實技術棧是：
 
-## 功能
+- Python
+- Streamlit
+- SQLite
+- OpenAI API
 
-- 家人試用：登入後可在側邊欄選擇或新增家人，每個人的資料獨立保存
-- 每日輸入：體重、體脂、可選腰圍、睡眠小時與分鐘、睡眠品質百分比、當日飲食總評、Apple Watch 運動摘要、復健、備註
-- AI 飲食教練：用一句話記錄餐食，估算熱量、蛋白質、纖維、碳水與脂肪，並依照每日目標給建議
-- 餐食修正：已輸入的餐食可以編輯、重新估算或刪除
-- 登入密碼：部署到 Streamlit Cloud 後，必須先輸入密碼才能使用
-- 飲食偏好記憶：儲存減脂、增肌或維持目標，以及熱量、蛋白質、纖維與飲食偏好
-- 趨勢圖表：查看體重、體脂、腰圍、睡眠與運動量變化
-- 每週報告：依照指定週期自動產生健康總結與下週建議
-- SQLite 本機資料庫：資料儲存在 `data/health.db`
+目前版本是先穩定 SQLite 版，資料庫檔案位於 `data/health.db`。這個 repo 目前不是 Supabase 版本，也不要假設已經有 Supabase 連線或 Supabase table。中期可以規劃 Supabase migration，但應該等 SQLite 版整理穩定、測試流程明確後再做。
 
-## Mac 安裝方式
+## 目前功能
 
-請先確認 Mac 已安裝 Python 3.10 以上。
+- 註冊 / 登入 / 邀請碼 / 管理員模式
+- 記住我 30 天
+- AI 文字飲食輸入
+- AI 照片飲食輸入，支援上傳照片與需要時啟用相機
+- 餐食保存、修改、重新估算、刪除
+- 每日營養總覽
+- 每日健康記錄
+- 體重、體脂、腰圍、BMI、睡眠趨勢圖
+- 每週報告
+- 管理員後台
+
+## 專案結構
+
+```text
+app.py              Streamlit 主程式，目前包含登入、資料庫、AI、UI 與管理後台
+requirements.txt    Python 套件需求
+README.md           專案說明
+DEV_CHECKLIST.md    每次修改後的手動檢查清單
+REFACTOR_PLAN.md    未來重構路線圖
+data/health.db      SQLite 真實資料庫，不應提交到 Git
+```
+
+## 安裝與啟動
+
+請先確認已安裝 Python 3.10 以上。
 
 ```bash
 python3 --version
-```
-
-如果 macOS 提示需要安裝 Command Line Tools，可以先執行：
-
-```bash
-xcode-select --install
 ```
 
 建立並啟用虛擬環境：
@@ -47,27 +60,29 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-啟動後，瀏覽器會開啟本機網址，通常是：
+啟動後通常會開啟：
 
 ```text
 http://localhost:8501
 ```
 
-## 手機連線
+## 資料庫
 
-如果要用手機開啟，Mac 必須保持開機、不要睡眠，而且手機和 Mac 要連同一個 Wi-Fi。
-
-使用 `outputs/啟動健康管理App.command` 啟動時，終端機會顯示手機網址，例如：
+第一次啟動時，App 會自動建立：
 
 ```text
-http://192.168.x.x:8501
+data/health.db
 ```
 
-手機請輸入終端機顯示的網址。不要在手機輸入 `127.0.0.1:8501`，因為那代表手機自己，不是你的 Mac。
+這是目前正式使用的 SQLite 資料庫。請不要提交、刪除或移動真實資料庫檔案。若需要備份，請在 App 關閉後複製 `data/health.db` 到安全位置。
 
-## 登入帳號
+目前多人資料隔離主要依靠 `person_name`，不是穩定的 `user_id`。短期先維持現況以避免破壞既有資料；中期若要做 Supabase migration，建議改成以穩定 `user_id` 作為主要資料關聯。
 
-App 支援家人自己註冊帳號。部署到 Streamlit Cloud 後，到 app 的 Settings > Secrets 加上：
+## Secrets / Environment Variables
+
+部署到 Streamlit Cloud 時，請到 App 的 Settings > Secrets 設定需要的值。
+
+基本範例：
 
 ```toml
 INVITE_CODE = "換成你的家庭邀請碼"
@@ -78,36 +93,37 @@ REMEMBER_LOGIN_SECRET = "換成一串長一點的隨機文字"
 Teo = "換成你的管理員密碼"
 ```
 
-家人第一次使用時，輸入自己的名稱、自己設定的密碼，以及邀請碼來建立帳號。每個人登入後只能看到自己的資料。密碼會雜湊後存進資料庫，不會以明文保存。
-
-管理員登入後可以切換查看使用者資料、重設使用者密碼，或刪除使用者與其所有資料。
-
-`OPENAI_API_KEY` 用於 AI 飲食教練的拍照 / 上傳照片辨識。如果沒有設定，文字輸入仍可使用，照片辨識會顯示設定提醒。
-
-`REMEMBER_LOGIN_SECRET` 用於「記住我」登入狀態簽章，建議正式部署時設定一串只有管理者知道的隨機文字。
-
-如果你想由管理者先建立固定帳號，也仍可使用：
+可選設定：
 
 ```toml
+OPENAI_MODEL = "gpt-5.5"
+
 [users]
 爸爸 = "爸爸的密碼"
 媽媽 = "媽媽的密碼"
-孩子 = "孩子的密碼"
 ```
 
-如果只是本機測試，也可以暫時使用共用密碼：
+本機測試也可以暫時使用：
 
 ```bash
 APP_PASSWORD="換成你的密碼" streamlit run app.py
 ```
 
-如果沒有設定 `INVITE_CODE`、`[users]` 或 `APP_PASSWORD`，App 會停止在設定提醒頁，不會顯示健康資料。
+設定說明：
 
-## 部署家人版
+- `INVITE_CODE`：家人註冊用邀請碼。
+- `[admins]`：管理員帳號與密碼。
+- `[users]`：可選，固定使用者帳號與密碼。
+- `APP_PASSWORD`：可選，本機或簡易測試用共用密碼。
+- `OPENAI_API_KEY`：AI 文字飲食與照片飲食估算使用。
+- `OPENAI_MODEL`：可選，指定 OpenAI 模型；未設定時使用程式預設值。
+- `REMEMBER_LOGIN_SECRET`：記住我 30 天的登入 token 簽章密鑰，正式部署建議一定設定。
 
-這個版本建議部署成獨立 Streamlit app。
+如果沒有設定 `INVITE_CODE`、`[admins]`、`[users]` 或 `APP_PASSWORD`，App 會顯示設定提醒，不會進入健康資料頁面。
 
-Streamlit Cloud 新增 app 時設定：
+## Streamlit Cloud 部署
+
+Streamlit Cloud 新增 App 時可設定：
 
 ```text
 Repository: typerhu/pgy90-family
@@ -115,29 +131,17 @@ Branch: main
 Main file path: app.py
 ```
 
-部署後，請設定家人版邀請碼，不要沿用個人版密碼。
-
-## 資料庫
-
-第一次啟動時會自動建立：
-
-```text
-data/health.db
-```
-
-不需要手動建立資料庫。若未來想重新開始，可以先關閉 App，再刪除 `data/health.db`，下次啟動會重新建立空資料庫。
+部署後請確認 Secrets 已設定，尤其是 `INVITE_CODE`、`[admins]`、`OPENAI_API_KEY` 與 `REMEMBER_LOGIN_SECRET`。
 
 ## 使用建議
 
-- 每天記錄即可，不需要精準計算熱量
-- 每個人第一次使用時用邀請碼註冊自己的帳號和密碼，之後用自己的帳號登入
-- 管理員帳號可查看所有使用者，也可重設密碼或刪除使用者資料
-- 腰圍不需要每天量，有測量時再勾選並填寫即可
-- 每餐飲食統一到「AI 飲食教練」記錄；「每日輸入」只保留當日飲食總評
-- 運動可以照 Apple Watch 填入運動分鐘、平均心率、最高心率、活動熱量與距離
-- RPE 是主觀強度，0 代表休息，10 代表極限強度
-- 每週到「每週報告」頁面按下產生總結，保存當週摘要
-- 中期目標設定為 75kg、體脂 13-15%
-- 到「AI 飲食教練」頁面可以輸入例如「午餐吃海南雞飯加一顆蛋，喝無糖拿鐵」
-- 如果不小心重複輸入餐食，到「今日餐食」展開該筆紀錄，勾選確認後即可刪除；也可以直接修改內容或重新估算
-- 目前餐食營養是本機規則估算，適合日常追蹤方向；若要像 Welling 一樣看照片估算，可再接上圖片 AI
+- 每位家人使用自己的帳號登入。
+- 每日健康記錄可只填有記錄到的資料，不必每天完整填滿。
+- 每餐飲食建議統一到「AI 飲食教練」記錄。
+- AI 估算是健康追蹤用的近似值，必要時可以手動修正餐食營養。
+- 管理員帳號可查看使用者、重設密碼或刪除使用者資料。
+- 每次修改程式後，請依照 `DEV_CHECKLIST.md` 做基本手動檢查。
+
+## 未來方向
+
+短期目標是穩定目前 SQLite 版本，讓登入、AI 飲食、照片輸入、餐食保存與每日總覽維持可靠。中期再規劃 Supabase migration，並在遷移前先建立清楚的資料備份、測試與 `user_id` 資料模型。
