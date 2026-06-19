@@ -38,7 +38,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "2026/0619/2029"
+APP_VERSION = "Ver. PGY90-G1-260619-2057-R02"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1749,176 +1749,6 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             current_activity_level,
         )
 
-    with st.expander("個人目標與飲食偏好", expanded=profile is None):
-        height_cm = st.number_input(
-            "身高 cm",
-            min_value=100.0,
-            max_value=230.0,
-            value=float(current_height),
-            step=0.5,
-            format="%.1f",
-            width=120,
-            key=f"profile_height_{person_name}",
-        )
-        body_shape_goal = st.selectbox("體態方向", BODY_SHAPE_GOALS, key=f"body_shape_goal_{person_name}")
-        recommended_targets = recommended_body_targets(height_cm, body_shape_goal)
-        st.caption(
-            "建議："
-            f"目標體重 {compact_number(recommended_targets['target_weight_kg'])} kg；"
-            f"體脂 {compact_number(recommended_targets['target_body_fat_min'])}-"
-            f"{compact_number(recommended_targets['target_body_fat_max'])}%；"
-            f"健康體重範圍 {compact_number(recommended_targets['healthy_weight_min'])}-"
-            f"{compact_number(recommended_targets['healthy_weight_max'])} kg"
-        )
-        if st.button("套用建議值", use_container_width=True):
-            st.session_state[f"target_weight_{person_name}"] = recommended_targets["target_weight_kg"]
-            st.session_state[f"target_body_fat_min_{person_name}"] = recommended_targets["target_body_fat_min"]
-            st.session_state[f"target_body_fat_max_{person_name}"] = recommended_targets["target_body_fat_max"]
-            st.rerun()
-
-        with st.form("coach_profile_form"):
-            gender = st.selectbox(
-                "性別",
-                GENDERS,
-                index=GENDERS.index(current_gender),
-            )
-            birth_year_text = st.text_input(
-                "出生年份",
-                value=current_birth_year,
-                max_chars=4,
-                placeholder="例：1980，可留空",
-            )
-            activity_level = st.selectbox(
-                "活動量",
-                ACTIVITY_LEVELS,
-                index=ACTIVITY_LEVELS.index(current_activity_level),
-            )
-            goal = st.selectbox(
-                "目前目標",
-                GOALS,
-                index=GOALS.index(current_goal) if current_goal in GOALS else 0,
-            )
-            weight = st.number_input(
-                "目前體重 kg",
-                min_value=30.0,
-                max_value=180.0,
-                value=float(current_weight),
-                step=0.1,
-                format="%.1f",
-                width=120,
-            )
-            if average_week_weight is not None:
-                st.caption(f"最近 7 天平均：{compact_number(average_week_weight)} kg")
-            target_weight = st.number_input(
-                "目標體重 kg",
-                min_value=30.0,
-                max_value=180.0,
-                value=float(st.session_state.get(f"target_weight_{person_name}", targets["target_weight_kg"])),
-                step=0.1,
-                format="%.1f",
-                width=120,
-            )
-            target_body_fat_min = st.number_input(
-                "目標體脂下限 %",
-                min_value=3.0,
-                max_value=45.0,
-                value=float(st.session_state.get(f"target_body_fat_min_{person_name}", targets["target_body_fat_min"])),
-                step=0.5,
-                format="%.1f",
-                width=120,
-            )
-            target_body_fat_max = st.number_input(
-                "目標體脂上限 %",
-                min_value=3.0,
-                max_value=45.0,
-                value=max(
-                    float(st.session_state.get(f"target_body_fat_max_{person_name}", targets["target_body_fat_max"])),
-                    float(target_body_fat_min),
-                ),
-                step=0.5,
-                format="%.1f",
-                width=120,
-            )
-            suggested_calories, suggested_protein, suggested_fiber = default_targets(weight, goal, activity_level)
-            suggested_maintenance = maintenance_calories(weight, activity_level)
-            activity_multiplier = ACTIVITY_CALORIE_MULTIPLIERS.get(
-                activity_level,
-                ACTIVITY_CALORIE_MULTIPLIERS["一般活動"],
-            )
-            calorie_target = st.number_input(
-                "每日熱量目標 kcal",
-                min_value=1000,
-                max_value=5000,
-                value=int(default_calories if profile is not None else suggested_calories),
-                step=50,
-                width=140,
-            )
-            st.caption(
-                f"建議估算：{suggested_calories} kcal / 日；"
-                f"{activity_level} = 體重 × {activity_multiplier}，"
-                f"維持熱量約 {suggested_maintenance} kcal"
-            )
-            protein_target = st.number_input(
-                "每日蛋白質目標 g",
-                min_value=40,
-                max_value=300,
-                value=int(default_protein if profile is not None else suggested_protein),
-                step=5,
-                width=120,
-            )
-            st.caption(f"建議估算：{suggested_protein} g / 日")
-            fiber_target = st.number_input(
-                "每日纖維目標 g",
-                min_value=10,
-                max_value=80,
-                value=int(default_fiber if profile is not None else suggested_fiber),
-                step=1,
-                width=120,
-            )
-            st.caption(f"建議估算：{suggested_fiber} g / 日")
-            preferences = st.text_area(
-                "飲食偏好 / 禁忌 / 身體狀況",
-                value=current_preferences,
-                height=90,
-            )
-            if st.form_submit_button("儲存偏好", use_container_width=True):
-                if target_body_fat_min > target_body_fat_max:
-                    st.warning("目標體脂下限不能高於上限。")
-                    st.stop()
-                cleaned_birth_year = birth_year_text.strip()
-                birth_year = None
-                if cleaned_birth_year:
-                    if not cleaned_birth_year.isdigit():
-                        st.warning("出生年份請輸入 4 位數字，或留空。")
-                        st.stop()
-                    birth_year = int(cleaned_birth_year)
-                    if birth_year < 1900 or birth_year > date.today().year:
-                        st.warning("出生年份看起來不合理，請確認後再儲存。")
-                        st.stop()
-                save_coach_profile(
-                    person_name,
-                    {
-                        "goal": goal,
-                        "height_cm": height_cm,
-                        "target_weight_kg": target_weight,
-                        "target_body_fat_min": target_body_fat_min,
-                        "target_body_fat_max": target_body_fat_max,
-                        "current_weight_kg": weight,
-                        "daily_calorie_target": calorie_target,
-                        "protein_target_g": protein_target,
-                        "fiber_target_g": fiber_target,
-                        "preferences": preferences.strip(),
-                        "gender": gender,
-                        "birth_year": birth_year,
-                        "activity_level": activity_level,
-                    }
-                )
-                st.session_state.pop(f"target_weight_{person_name}", None)
-                st.session_state.pop(f"target_body_fat_min_{person_name}", None)
-                st.session_state.pop(f"target_body_fat_max_{person_name}", None)
-                st.success("已儲存你的飲食偏好。")
-                st.rerun()
-
     selected_date = st.date_input("記錄日期", value=date.today(), key="coach_date")
     meals = load_meals(person_name)
     totals = daily_meal_totals(meals, selected_date)
@@ -2224,6 +2054,176 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             ].sum()
             st.line_chart(daily.set_index("log_date"), height=260)
 
+    with st.expander("個人目標與飲食偏好", expanded=profile is None):
+        height_cm = st.number_input(
+            "身高 cm",
+            min_value=100.0,
+            max_value=230.0,
+            value=float(current_height),
+            step=0.5,
+            format="%.1f",
+            width=120,
+            key=f"profile_height_{person_name}",
+        )
+        body_shape_goal = st.selectbox("體態方向", BODY_SHAPE_GOALS, key=f"body_shape_goal_{person_name}")
+        recommended_targets = recommended_body_targets(height_cm, body_shape_goal)
+        st.caption(
+            "建議："
+            f"目標體重 {compact_number(recommended_targets['target_weight_kg'])} kg；"
+            f"體脂 {compact_number(recommended_targets['target_body_fat_min'])}-"
+            f"{compact_number(recommended_targets['target_body_fat_max'])}%；"
+            f"健康體重範圍 {compact_number(recommended_targets['healthy_weight_min'])}-"
+            f"{compact_number(recommended_targets['healthy_weight_max'])} kg"
+        )
+        if st.button("套用建議值", use_container_width=True):
+            st.session_state[f"target_weight_{person_name}"] = recommended_targets["target_weight_kg"]
+            st.session_state[f"target_body_fat_min_{person_name}"] = recommended_targets["target_body_fat_min"]
+            st.session_state[f"target_body_fat_max_{person_name}"] = recommended_targets["target_body_fat_max"]
+            st.rerun()
+
+        with st.form("coach_profile_form"):
+            gender = st.selectbox(
+                "性別",
+                GENDERS,
+                index=GENDERS.index(current_gender),
+            )
+            birth_year_text = st.text_input(
+                "出生年份",
+                value=current_birth_year,
+                max_chars=4,
+                placeholder="例：1980，可留空",
+            )
+            activity_level = st.selectbox(
+                "活動量",
+                ACTIVITY_LEVELS,
+                index=ACTIVITY_LEVELS.index(current_activity_level),
+            )
+            goal = st.selectbox(
+                "目前目標",
+                GOALS,
+                index=GOALS.index(current_goal) if current_goal in GOALS else 0,
+            )
+            weight = st.number_input(
+                "目前體重 kg",
+                min_value=30.0,
+                max_value=180.0,
+                value=float(current_weight),
+                step=0.1,
+                format="%.1f",
+                width=120,
+            )
+            if average_week_weight is not None:
+                st.caption(f"最近 7 天平均：{compact_number(average_week_weight)} kg")
+            target_weight = st.number_input(
+                "目標體重 kg",
+                min_value=30.0,
+                max_value=180.0,
+                value=float(st.session_state.get(f"target_weight_{person_name}", targets["target_weight_kg"])),
+                step=0.1,
+                format="%.1f",
+                width=120,
+            )
+            target_body_fat_min = st.number_input(
+                "目標體脂下限 %",
+                min_value=3.0,
+                max_value=45.0,
+                value=float(st.session_state.get(f"target_body_fat_min_{person_name}", targets["target_body_fat_min"])),
+                step=0.5,
+                format="%.1f",
+                width=120,
+            )
+            target_body_fat_max = st.number_input(
+                "目標體脂上限 %",
+                min_value=3.0,
+                max_value=45.0,
+                value=max(
+                    float(st.session_state.get(f"target_body_fat_max_{person_name}", targets["target_body_fat_max"])),
+                    float(target_body_fat_min),
+                ),
+                step=0.5,
+                format="%.1f",
+                width=120,
+            )
+            suggested_calories, suggested_protein, suggested_fiber = default_targets(weight, goal, activity_level)
+            suggested_maintenance = maintenance_calories(weight, activity_level)
+            activity_multiplier = ACTIVITY_CALORIE_MULTIPLIERS.get(
+                activity_level,
+                ACTIVITY_CALORIE_MULTIPLIERS["一般活動"],
+            )
+            calorie_target = st.number_input(
+                "每日熱量目標 kcal",
+                min_value=1000,
+                max_value=5000,
+                value=int(default_calories if profile is not None else suggested_calories),
+                step=50,
+                width=140,
+            )
+            st.caption(
+                f"建議估算：{suggested_calories} kcal / 日；"
+                f"{activity_level} = 體重 × {activity_multiplier}，"
+                f"維持熱量約 {suggested_maintenance} kcal"
+            )
+            protein_target = st.number_input(
+                "每日蛋白質目標 g",
+                min_value=40,
+                max_value=300,
+                value=int(default_protein if profile is not None else suggested_protein),
+                step=5,
+                width=120,
+            )
+            st.caption(f"建議估算：{suggested_protein} g / 日")
+            fiber_target = st.number_input(
+                "每日纖維目標 g",
+                min_value=10,
+                max_value=80,
+                value=int(default_fiber if profile is not None else suggested_fiber),
+                step=1,
+                width=120,
+            )
+            st.caption(f"建議估算：{suggested_fiber} g / 日")
+            preferences = st.text_area(
+                "飲食偏好 / 禁忌 / 身體狀況",
+                value=current_preferences,
+                height=90,
+            )
+            if st.form_submit_button("儲存偏好", use_container_width=True):
+                if target_body_fat_min > target_body_fat_max:
+                    st.warning("目標體脂下限不能高於上限。")
+                    st.stop()
+                cleaned_birth_year = birth_year_text.strip()
+                birth_year = None
+                if cleaned_birth_year:
+                    if not cleaned_birth_year.isdigit():
+                        st.warning("出生年份請輸入 4 位數字，或留空。")
+                        st.stop()
+                    birth_year = int(cleaned_birth_year)
+                    if birth_year < 1900 or birth_year > date.today().year:
+                        st.warning("出生年份看起來不合理，請確認後再儲存。")
+                        st.stop()
+                save_coach_profile(
+                    person_name,
+                    {
+                        "goal": goal,
+                        "height_cm": height_cm,
+                        "target_weight_kg": target_weight,
+                        "target_body_fat_min": target_body_fat_min,
+                        "target_body_fat_max": target_body_fat_max,
+                        "current_weight_kg": weight,
+                        "daily_calorie_target": calorie_target,
+                        "protein_target_g": protein_target,
+                        "fiber_target_g": fiber_target,
+                        "preferences": preferences.strip(),
+                        "gender": gender,
+                        "birth_year": birth_year,
+                        "activity_level": activity_level,
+                    }
+                )
+                st.session_state.pop(f"target_weight_{person_name}", None)
+                st.session_state.pop(f"target_body_fat_min_{person_name}", None)
+                st.session_state.pop(f"target_body_fat_max_{person_name}", None)
+                st.success("已儲存你的飲食偏好。")
+                st.rerun()
+
 
 # Admin tools and person selection
 
@@ -2345,7 +2345,7 @@ def app() -> None:
     st.title(f"{selected_person} 的健康管理")
     st.caption(f"目前查看：{selected_person}")
     st.markdown(
-        f"<div style='text-align: right; color: #8a8f98; font-size: 0.85rem;'>Ver. {APP_VERSION}</div>",
+        f"<div style='text-align: right; color: #8a8f98; font-size: 0.85rem;'>{APP_VERSION}</div>",
         unsafe_allow_html=True,
     )
 
