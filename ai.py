@@ -13,6 +13,7 @@ import streamlit as st
 
 
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
+OPENAI_TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504, 520, 522, 524}
 
 FOOD_ESTIMATES = {
     "雞胸": (165, 31, 0, 0, 3.6),
@@ -216,6 +217,7 @@ def format_meal_context(coach_context: dict | None) -> str:
         ("birth_year", "出生年份"),
         ("activity_level", "活動量"),
         ("goal", "目前目標"),
+        ("height_cm", "身高 cm"),
         ("current_weight_kg", "目前體重 kg"),
         ("target_weight_kg", "目標體重 kg"),
         ("target_body_fat_range", "目標體脂範圍"),
@@ -261,6 +263,92 @@ def request_openai_json(prompt: str, image_url: str | None = None) -> dict:
     )
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def request_openai_text(prompt: str, image_url: str | None = None) -> str:
+    response_data = request_openai_json(prompt, image_url)
+    result = extract_response_text(response_data)
+    if not result:
+        raise RuntimeError("AI 沒有回傳可讀取的分析內容。")
+    return result
+
+
+def format_openai_http_error(error: urllib.error.HTTPError, action: str) -> str:
+    details = error.read().decode("utf-8", errors="replace").strip()
+    if error.code in OPENAI_TRANSIENT_STATUS_CODES:
+        return (
+            f"{action}暫時失敗（HTTP {error.code}）。"
+            "這通常是 AI 服務暫時忙碌、圖片太大或連線中斷；請稍後重試，"
+            "或先改用文字描述選項。"
+        )
+    if details:
+        return f"{action}失敗：{details}"
+    return f"{action}失敗（HTTP {error.code}）。"
+
+
+def build_pre_meal_prompt(description: str, coach_context: dict | None, source_label: str) -> str:
+    prompt = f"""
+你是家庭健康管理 App 的餐前決策助手。使用者還沒吃這一餐，請根據{source_label}、今日營養進度、個人目標、活動量、飲食偏好與健康限制，建議這一餐怎麼選比較合理。
+
+請用繁體中文清楚輸出，不要回傳 JSON。請包含以下區塊：
+
+### 最推薦吃法
+### 可以吃但要控制份量
+### 建議少吃或避開
+### 份量建議
+### 搭配建議
+### 如果想吃高熱量食物，如何降低傷害
+### 後面一餐是否需要修正
+### 簡短理由
+### 信心等級
+
+信心等級只能是：高 / 中 / 低。
+如果文字或圖片資訊不足，請提出最少量追問，或降低信心等級。
+不要把食物分成絕對好壞；不要羞辱、恐嚇或製造焦慮；不要鼓勵極端節食或過度克制；不要做醫療診斷。
+建議要可執行，並尊重使用者的飲食偏好、禁忌與身體狀況。
+如果蛋白質不足，優先提醒雞肉、魚、蛋、豆腐、瘦肉或乳製品等選項。
+如果纖維不足，提醒蔬菜、水果、豆類或全穀類。
+如果熱量剩餘不多，提醒控制油脂、份量與含糖飲料，並給出可以吃一點想吃食物的折衷方案。
+
+使用者餐前輸入：
+{description}
+"""
+    prompt += format_meal_context(coach_context)
+    return prompt
+
+
+def analyze_pre_meal_text(description: str, coach_context: dict | None = None) -> str:
+    if not get_openai_api_key():
+        raise RuntimeError("尚未設定 OPENAI_API_KEY，無法使用餐前 AI 分析。")
+    prompt = build_pre_meal_prompt(description, coach_context, "使用者輸入的餐前文字")
+    try:
+        return request_openai_text(prompt)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("餐前文字分析回傳格式無法讀取，請稍後再試。") from error
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(format_openai_http_error(error, "餐前文字分析")) from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"餐前文字分析連線失敗：{error.reason}") from error
+
+
+def analyze_pre_meal_photo(
+    image_bytes: bytes,
+    mime_type: str,
+    coach_context: dict | None = None,
+    description: str = "請根據照片中的菜單、餐檯或食物選項提供餐前建議。",
+) -> str:
+    if not get_openai_api_key():
+        raise RuntimeError("尚未設定 OPENAI_API_KEY，無法使用餐前圖片分析。")
+    image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+    prompt = build_pre_meal_prompt(description, coach_context, "圖片中的餐前選項")
+    try:
+        return request_openai_text(prompt, image_url)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("餐前圖片分析回傳格式無法讀取，請稍後再試。") from error
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(format_openai_http_error(error, "餐前圖片分析")) from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"餐前圖片分析連線失敗：{error.reason}") from error
 
 
 def analyze_meal_text(description: str, meal_type_override: str, coach_context: dict | None = None) -> dict:

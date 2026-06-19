@@ -20,6 +20,8 @@ from ai import (
     MEAL_TYPES,
     analyze_meal_photo,
     analyze_meal_text,
+    analyze_pre_meal_photo,
+    analyze_pre_meal_text,
     detect_meal_type,
     estimate_nutrition,
     get_openai_api_key,
@@ -38,7 +40,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2057-R02"
+APP_VERSION = "Ver. PGY90-G1-260619-2129-R03"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -64,6 +66,7 @@ GOALS = ["減脂", "增肌", "維持"]
 BODY_SHAPE_GOALS = ["健康減脂", "精實有線條", "增肌維持"]
 GENDERS = ["男", "女", "不指定"]
 ACTIVITY_LEVELS = ["低活動", "一般活動", "較高活動"]
+PRE_MEAL_IMAGE_MAX_MB = 8
 ACTIVITY_CALORIE_MULTIPLIERS = {
     "低活動": 28,
     "一般活動": 31,
@@ -1092,6 +1095,7 @@ def build_meal_ai_context(
         "birth_year": profile["birth_year"] if profile and profile["birth_year"] else "",
         "activity_level": profile["activity_level"] if profile and profile["activity_level"] else "一般活動",
         "goal": goal,
+        "height_cm": round(float(get_person_height_cm(person_name)), 1),
         "current_weight_kg": round(float(current_weight), 1),
         "target_weight_kg": round(float(targets["target_weight_kg"]), 1),
         "target_body_fat_range": (
@@ -1789,6 +1793,75 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     for item in coach_feedback(totals, profile):
         st.info(item)
     show_latest_meal_ai_notes(person_name, selected_date)
+
+    st.markdown("#### 餐前分析")
+    pre_meal_result_key = f"pre_meal_analysis_result_{person_name}"
+    pre_text_tab, pre_photo_tab = st.tabs(["文字分析", "圖片分析"])
+
+    with pre_text_tab:
+        with st.form(f"pre_meal_text_form_{person_name}"):
+            pre_meal_text = st.text_area(
+                "還沒吃之前，先描述眼前選項",
+                placeholder="例：我現在有雞飯、生肉麵、經濟飯可以選，今天蛋白質還不夠，怎麼吃？",
+                height=100,
+                key=f"pre_meal_text_input_{person_name}",
+            )
+            analyze_pre_text = st.form_submit_button("分析怎麼吃", use_container_width=True)
+
+        if analyze_pre_text:
+            cleaned_pre_meal_text = pre_meal_text.strip()
+            if not cleaned_pre_meal_text:
+                st.warning("先輸入你現在看到或想吃的選項。")
+            elif not get_openai_api_key():
+                st.warning("尚未設定 OPENAI_API_KEY，無法使用餐前 AI 分析。")
+            else:
+                try:
+                    with st.spinner("正在分析這餐怎麼選..."):
+                        st.session_state[pre_meal_result_key] = analyze_pre_meal_text(
+                            cleaned_pre_meal_text,
+                            meal_ai_context,
+                        )
+                except RuntimeError as error:
+                    st.error(str(error))
+
+    with pre_photo_tab:
+        pre_meal_photo = st.file_uploader(
+            "上傳菜單、餐檯或食物選項照片",
+            type=["jpg", "jpeg", "png", "webp"],
+            key=f"pre_meal_photo_{person_name}",
+        )
+        pre_meal_photo_note = st.text_area(
+            "補充說明",
+            placeholder="例：我想從這幾樣裡選晚餐，今天熱量剩不多。",
+            height=80,
+            key=f"pre_meal_photo_note_{person_name}",
+        )
+        if st.button("分析照片怎麼吃", use_container_width=True, key=f"pre_meal_photo_button_{person_name}"):
+            if pre_meal_photo is None:
+                st.warning("先上傳一張菜單、餐檯或食物選項照片。")
+            elif not get_openai_api_key():
+                st.warning("尚未設定 OPENAI_API_KEY，無法使用餐前圖片分析。")
+            elif pre_meal_photo.size > PRE_MEAL_IMAGE_MAX_MB * 1024 * 1024:
+                st.warning(
+                    f"這張圖片超過 {PRE_MEAL_IMAGE_MAX_MB} MB，請先裁切或壓縮後再上傳，"
+                    "或改用文字描述餐點選項。"
+                )
+            else:
+                try:
+                    with st.spinner("正在分析照片裡的選項..."):
+                        st.session_state[pre_meal_result_key] = analyze_pre_meal_photo(
+                            pre_meal_photo.getvalue(),
+                            pre_meal_photo.type or "image/jpeg",
+                            meal_ai_context,
+                            pre_meal_photo_note.strip()
+                            or "請根據照片中的菜單、餐檯或食物選項提供餐前建議。",
+                        )
+                except RuntimeError as error:
+                    st.error(str(error))
+
+    if st.session_state.get(pre_meal_result_key):
+        st.markdown("#### 餐前分析結果")
+        st.markdown(st.session_state[pre_meal_result_key])
 
     text_tab, photo_tab = st.tabs(["文字輸入", "照片輸入"])
 
