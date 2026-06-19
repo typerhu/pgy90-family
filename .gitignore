@@ -185,3 +185,9 @@ data/health.db
 *.db
 *.sqlite
 *.sqlite3
+
+# macOS local metadata
+.DS_Store
+
+# Local Streamlit secrets
+.streamlit/secrets.toml
