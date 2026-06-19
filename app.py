@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-0722-R12"
+APP_VERSION = "Ver. PGY90-G1-260620-0744-R13"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1510,6 +1510,173 @@ def generate_weekly_summary(week_df: pd.DataFrame, window: WeekWindow, targets: 
     )
 
 
+def positive_numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    if df.empty or column not in df.columns:
+        return pd.Series(dtype="float64")
+    values = pd.to_numeric(df[column], errors="coerce")
+    return values[values > 0].dropna()
+
+
+def weekly_summary_table(rows: list[tuple[str, str]]) -> None:
+    st.dataframe(
+        pd.DataFrame(rows, columns=["項目", "本週摘要"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_weekly_body_summary(week_df: pd.DataFrame) -> None:
+    st.markdown("### 本週身體指標摘要")
+    weights = week_df[["log_date", "weight_kg"]].copy() if "weight_kg" in week_df else pd.DataFrame()
+    if not weights.empty:
+        weights["weight_kg"] = pd.to_numeric(weights["weight_kg"], errors="coerce")
+        weights = weights[weights["weight_kg"] > 0].dropna(subset=["weight_kg"]).sort_values("log_date")
+
+    body_fat = positive_numeric_series(week_df, "body_fat_percent")
+    waist = positive_numeric_series(week_df, "waist_cm")
+    if weights.empty and body_fat.empty and waist.empty:
+        st.info("本週身體指標資料不足。")
+        return
+
+    first_weight = float(weights.iloc[0]["weight_kg"]) if not weights.empty else None
+    latest_weight = float(weights.iloc[-1]["weight_kg"]) if not weights.empty else None
+    weekly_summary_table(
+        [
+            ("週初體重", f"{compact_number(first_weight)} kg"),
+            ("最新體重", f"{compact_number(latest_weight)} kg"),
+            ("體重變化", format_delta(latest_weight, first_weight, "kg") or "-"),
+            ("平均體脂", f"{compact_number(body_fat.mean())} %"),
+            ("平均腰圍", f"{compact_number(waist.mean())} cm"),
+        ]
+    )
+
+
+def render_weekly_sleep_summary(week_df: pd.DataFrame) -> None:
+    st.markdown("### 本週睡眠摘要")
+    sleep_hours = positive_numeric_series(week_df, "sleep_hours")
+    sleep_quality = positive_numeric_series(week_df, "sleep_quality")
+    if sleep_hours.empty and sleep_quality.empty:
+        st.info("本週睡眠資料不足。")
+        return
+
+    low_sleep_days = int((sleep_hours < 6).sum()) if not sleep_hours.empty else 0
+    weekly_summary_table(
+        [
+            ("有記錄睡眠天數", f"{int(sleep_hours.count())} 天"),
+            ("平均睡眠時間", f"{compact_number(sleep_hours.mean())} 小時"),
+            ("平均睡眠品質", f"{compact_number(sleep_quality.mean(), 0)} %"),
+            ("睡眠少於 6 小時", f"{low_sleep_days} 天"),
+        ]
+    )
+    st.caption("睡眠資料可作為恢復與訓練安排參考。")
+
+
+def render_weekly_bp_summary(week_df: pd.DataFrame) -> None:
+    st.markdown("### 本週血壓 / 脈搏摘要")
+    bp_columns = ["systolic_bp", "diastolic_bp", "pulse_bpm"]
+    available_columns = [column for column in bp_columns if column in week_df.columns]
+    if week_df.empty or not available_columns:
+        st.info("本週血壓 / 脈搏資料不足。")
+        return
+
+    bp_df = week_df[["log_date", *available_columns]].copy()
+    for column in available_columns:
+        bp_df[column] = pd.to_numeric(bp_df[column], errors="coerce")
+        bp_df.loc[bp_df[column] <= 0, column] = pd.NA
+    valid_rows = bp_df[bp_df[available_columns].notna().any(axis=1)].sort_values("log_date")
+    if valid_rows.empty:
+        st.info("本週血壓 / 脈搏資料不足。")
+        return
+
+    latest = valid_rows.iloc[-1]
+    latest_bp = (
+        f"{compact_number(latest.get('systolic_bp'), 0)} / "
+        f"{compact_number(latest.get('diastolic_bp'), 0)} mmHg，"
+        f"脈搏 {compact_number(latest.get('pulse_bpm'), 0)} bpm"
+    )
+    weekly_summary_table(
+        [
+            ("血壓 / 脈搏紀錄天數", f"{len(valid_rows)} 天"),
+            ("平均收縮壓", f"{compact_number(bp_df.get('systolic_bp', pd.Series(dtype='float64')).mean(), 0)} mmHg"),
+            ("平均舒張壓", f"{compact_number(bp_df.get('diastolic_bp', pd.Series(dtype='float64')).mean(), 0)} mmHg"),
+            ("平均脈搏", f"{compact_number(bp_df.get('pulse_bpm', pd.Series(dtype='float64')).mean(), 0)} bpm"),
+            ("最新一筆", latest_bp),
+        ]
+    )
+    st.caption("血壓與脈搏摘要僅作健康管理追蹤，不作醫療診斷。")
+
+
+def render_weekly_workout_summary(week_df: pd.DataFrame) -> None:
+    st.markdown("### 本週運動 / 訓練摘要")
+    workout_minutes = positive_numeric_series(week_df, "workout_minutes")
+    if workout_minutes.empty:
+        st.info("本週運動資料不足。")
+        return
+
+    workout_df = week_df.copy()
+    workout_df["workout_minutes"] = pd.to_numeric(workout_df["workout_minutes"], errors="coerce")
+    valid_workouts = workout_df[workout_df["workout_minutes"] > 0]
+    workout_counts = valid_workouts["workout_type"].dropna().replace("", pd.NA).dropna().value_counts()
+    main_workout = workout_counts.index[0] if not workout_counts.empty else "-"
+    rpe = positive_numeric_series(valid_workouts, "rpe")
+    active_calories = positive_numeric_series(valid_workouts, "active_calories")
+    distance = positive_numeric_series(valid_workouts, "distance_km")
+    active_calories_text = f"{compact_number(active_calories.sum(), 0)} kcal" if not active_calories.empty else "-"
+    distance_text = f"{compact_number(distance.sum())} km" if not distance.empty else "-"
+    weekly_summary_table(
+        [
+            ("運動天數", f"{len(valid_workouts)} 天"),
+            ("運動總分鐘", f"{int(workout_minutes.sum())} 分鐘"),
+            ("平均 RPE", compact_number(rpe.mean())),
+            ("最高 RPE", compact_number(rpe.max())),
+            ("主要運動類型", str(main_workout)),
+            ("活動熱量總和", active_calories_text),
+            ("距離總和", distance_text),
+        ]
+    )
+
+
+def render_weekly_rehab_fatigue_summary(week_df: pd.DataFrame) -> None:
+    st.markdown("### 本週復健與疲勞摘要")
+    if week_df.empty:
+        st.info("本週沒有明顯復健或疲勞紀錄。")
+        return
+
+    rehab_count = int(
+        pd.to_numeric(
+            week_df.get("rehab_done", pd.Series(dtype="float64")),
+            errors="coerce",
+        ).fillna(0).sum()
+    )
+    note_rows = []
+    for _, row in week_df.sort_values("log_date", ascending=False).iterrows():
+        log_date = row["log_date"].date().isoformat() if hasattr(row["log_date"], "date") else str(row["log_date"])
+        discomfort = str(row.get("discomfort_notes") or "").strip()
+        rehab = str(row.get("rehab_notes") or "").strip()
+        if discomfort:
+            note_rows.append((log_date, "疼痛 / 疲勞", discomfort))
+        if rehab:
+            note_rows.append((log_date, "復健", rehab))
+
+    if rehab_count <= 0 and not note_rows:
+        st.info("本週沒有明顯復健或疲勞紀錄。")
+        return
+
+    weekly_summary_table(
+        [
+            ("復健 / 活動度訓練次數", f"{rehab_count} 次"),
+            ("疼痛 / 疲勞文字紀錄", "有" if note_rows else "無"),
+        ]
+    )
+    if note_rows:
+        st.dataframe(
+            pd.DataFrame(note_rows[:3], columns=["日期", "類型", "內容"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    st.caption("復健與疲勞摘要只整理紀錄，不作醫療診斷或治療建議。")
+
+
 def save_weekly_report(person_name: str, window: WeekWindow, summary: str) -> None:
     with connect() as conn:
         conn.execute(
@@ -2013,6 +2180,12 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
         st.info(f"已儲存：{saved['generated_at']}")
     else:
         st.warning("尚未儲存本週總結。")
+
+    render_weekly_body_summary(week_df)
+    render_weekly_sleep_summary(week_df)
+    render_weekly_bp_summary(week_df)
+    render_weekly_workout_summary(week_df)
+    render_weekly_rehab_fatigue_summary(week_df)
 
     st.text_area(
         "健康總結",
