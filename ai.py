@@ -190,7 +190,7 @@ def parse_meal_ai_result(raw_text: str, fallback_description: str) -> dict:
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     data = json.loads(cleaned)
-    return {
+    result = {
         "description": str(data.get("description") or fallback_description),
         "meal_type": str(data.get("meal_type") or "點心"),
         "calories": int(round(float(data.get("calories") or 0))),
@@ -201,6 +201,42 @@ def parse_meal_ai_result(raw_text: str, fallback_description: str) -> dict:
         "confidence": str(data.get("confidence") or "低"),
         "matched": str(data.get("matched") or data.get("description") or "照片辨識"),
     }
+    for optional_key in ("coach_note", "next_meal_suggestion", "warning_note"):
+        if data.get(optional_key):
+            result[optional_key] = str(data[optional_key])
+    return result
+
+
+def format_meal_context(coach_context: dict | None) -> str:
+    if not coach_context:
+        return ""
+    labels = [
+        ("person_name", "使用者"),
+        ("goal", "目前目標"),
+        ("current_weight_kg", "目前體重 kg"),
+        ("target_weight_kg", "目標體重 kg"),
+        ("target_body_fat_range", "目標體脂範圍"),
+        ("daily_calorie_target", "每日熱量目標 kcal"),
+        ("protein_target_g", "每日蛋白質目標 g"),
+        ("fiber_target_g", "每日纖維目標 g"),
+        ("today_calories", "今日已攝取熱量 kcal"),
+        ("today_protein_g", "今日已攝取蛋白質 g"),
+        ("today_fiber_g", "今日已攝取纖維 g"),
+        ("today_carbs_g", "今日已攝取碳水 g"),
+        ("today_fat_g", "今日已攝取脂肪 g"),
+        ("remaining_calories", "今日剩餘熱量 kcal"),
+        ("remaining_protein_g", "今日剩餘蛋白質 g"),
+        ("remaining_fiber_g", "今日剩餘纖維 g"),
+        ("preferences", "飲食偏好 / 禁忌 / 身體狀況"),
+    ]
+    lines = []
+    for key, label in labels:
+        value = coach_context.get(key)
+        if value is not None and value != "":
+            lines.append(f"- {label}: {value}")
+    if not lines:
+        return ""
+    return "\n\n目前使用者與今日營養 context：\n" + "\n".join(lines)
 
 
 def request_openai_json(prompt: str, image_url: str | None = None) -> dict:
@@ -224,7 +260,7 @@ def request_openai_json(prompt: str, image_url: str | None = None) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def analyze_meal_text(description: str, meal_type_override: str) -> dict:
+def analyze_meal_text(description: str, meal_type_override: str, coach_context: dict | None = None) -> dict:
     if not get_openai_api_key():
         raise RuntimeError("尚未設定 OPENAI_API_KEY。")
 
@@ -239,9 +275,18 @@ calories: 整數 kcal
 protein_g, fiber_g, carbs_g, fat_g: 數字
 confidence: 高、中、低之一
 matched: 簡短說明辨識到的主要食物或估算依據
+可選欄位：
+coach_note: 根據今日進度與使用者偏好的簡短提醒
+next_meal_suggestion: 下一餐可執行建議
+warning_note: 只有在熱量接近或超過目標、或資訊不足時才回傳，語氣必須溫和
 使用者輸入：{description}
 營養只是估算；份量不確定時請保守估算並降低 confidence。
+請根據今日剩餘熱量、蛋白質、纖維與飲食偏好調整建議。
+若蛋白質不足，提醒補高蛋白食物；若纖維不足，提醒補蔬菜、水果或豆類。
+若熱量接近或超過目標，提醒後續餐食清淡、控制油脂與份量。
+不要使用羞辱、恐嚇、焦慮式語氣；不要鼓勵極端節食或過度限制；不要做醫療診斷。
 """
+    prompt += format_meal_context(coach_context)
     if meal_type_override != "自動判斷":
         prompt += f"\n使用者指定餐別為「{meal_type_override}」，meal_type 請使用這個值。"
     else:
@@ -267,7 +312,12 @@ matched: 簡短說明辨識到的主要食物或估算依據
     return result
 
 
-def analyze_meal_photo(image_bytes: bytes, mime_type: str, meal_type_override: str) -> dict:
+def analyze_meal_photo(
+    image_bytes: bytes,
+    mime_type: str,
+    meal_type_override: str,
+    coach_context: dict | None = None,
+) -> dict:
     api_key = get_openai_api_key()
     if not api_key:
         raise RuntimeError("尚未設定 OPENAI_API_KEY。")
@@ -284,8 +334,17 @@ calories: 整數 kcal
 protein_g, fiber_g, carbs_g, fat_g: 數字
 confidence: 高、中、低之一
 matched: 簡短說明辨識到的主要食物；如果不確定，說明不確定原因
+可選欄位：
+coach_note: 根據今日進度與使用者偏好的簡短提醒
+next_meal_suggestion: 下一餐可執行建議
+warning_note: 只有在熱量接近或超過目標、或資訊不足時才回傳，語氣必須溫和
 營養只是估算；看不清楚或份量不確定時請保守估算並降低 confidence。
+請根據今日剩餘熱量、蛋白質、纖維與飲食偏好調整建議。
+若蛋白質不足，提醒補高蛋白食物；若纖維不足，提醒補蔬菜、水果或豆類。
+若熱量接近或超過目標，提醒後續餐食清淡、控制油脂與份量。
+不要使用羞辱、恐嚇、焦慮式語氣；不要鼓勵極端節食或過度限制；不要做醫療診斷。
 """
+    prompt += format_meal_context(coach_context)
     if meal_type_override != "自動判斷":
         prompt += f"\n使用者指定餐別為「{meal_type_override}」，meal_type 請使用這個值。"
     else:

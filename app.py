@@ -37,6 +37,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
+APP_VERSION = "2026/0619/1402"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1046,6 +1047,64 @@ def recommended_body_targets(height_cm: float, body_shape_goal: str) -> dict[str
     }
 
 
+def build_meal_ai_context(
+    person_name: str,
+    profile: sqlite3.Row | None,
+    current_weight: float,
+    targets: dict[str, float],
+    nutrition_targets: dict[str, float],
+    totals: dict,
+) -> dict:
+    preferences = profile["preferences"] if profile else ""
+    goal = profile["goal"] if profile else "減脂"
+    return {
+        "person_name": person_name,
+        "goal": goal,
+        "current_weight_kg": round(float(current_weight), 1),
+        "target_weight_kg": round(float(targets["target_weight_kg"]), 1),
+        "target_body_fat_range": (
+            f"{compact_number(targets['target_body_fat_min'])}-"
+            f"{compact_number(targets['target_body_fat_max'])}%"
+        ),
+        "daily_calorie_target": int(nutrition_targets["calories"]),
+        "protein_target_g": round(float(nutrition_targets["protein_g"]), 1),
+        "fiber_target_g": round(float(nutrition_targets["fiber_g"]), 1),
+        "today_calories": int(totals["calories"]),
+        "today_protein_g": round(float(totals["protein_g"]), 1),
+        "today_fiber_g": round(float(totals["fiber_g"]), 1),
+        "today_carbs_g": round(float(totals["carbs_g"]), 1),
+        "today_fat_g": round(float(totals["fat_g"]), 1),
+        "remaining_calories": int(nutrition_targets["calories"] - totals["calories"]),
+        "remaining_protein_g": round(float(nutrition_targets["protein_g"] - totals["protein_g"]), 1),
+        "remaining_fiber_g": round(float(nutrition_targets["fiber_g"] - totals["fiber_g"]), 1),
+        "preferences": preferences,
+    }
+
+
+def remember_meal_ai_notes(person_name: str, selected_date: date, estimate: dict) -> None:
+    notes = {
+        key: estimate[key]
+        for key in ("coach_note", "next_meal_suggestion", "warning_note")
+        if estimate.get(key)
+    }
+    if notes:
+        st.session_state[f"latest_meal_ai_notes_{person_name}"] = {
+            "log_date": selected_date.isoformat(),
+            "notes": notes,
+        }
+
+
+def show_latest_meal_ai_notes(person_name: str, selected_date: date) -> None:
+    latest = st.session_state.get(f"latest_meal_ai_notes_{person_name}")
+    if not latest or latest.get("log_date") != selected_date.isoformat():
+        return
+    notes = latest.get("notes") or {}
+    if notes:
+        st.markdown("#### 剛剛這餐的 AI 建議")
+        for note in notes.values():
+            st.info(note)
+
+
 # Reports
 
 def week_window(selected: date) -> WeekWindow:
@@ -1702,6 +1761,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 step=50,
                 width=140,
             )
+            st.caption(f"建議估算：{suggested_calories} kcal / 日")
             protein_target = st.number_input(
                 "每日蛋白質目標 g",
                 min_value=40,
@@ -1710,6 +1770,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 step=5,
                 width=120,
             )
+            st.caption(f"建議估算：{suggested_protein} g / 日")
             fiber_target = st.number_input(
                 "每日纖維目標 g",
                 min_value=10,
@@ -1718,6 +1779,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 step=1,
                 width=120,
             )
+            st.caption(f"建議估算：{suggested_fiber} g / 日")
             preferences = st.text_area(
                 "飲食偏好 / 禁忌 / 身體狀況",
                 value=current_preferences,
@@ -1756,6 +1818,19 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     target_calories = profile["daily_calorie_target"] if profile else default_calories
     target_protein = profile["protein_target_g"] if profile else default_protein
     target_fiber = profile["fiber_target_g"] if profile else default_fiber
+    nutrition_targets = {
+        "calories": target_calories,
+        "protein_g": target_protein,
+        "fiber_g": target_fiber,
+    }
+    meal_ai_context = build_meal_ai_context(
+        person_name,
+        profile,
+        current_weight,
+        targets,
+        nutrition_targets,
+        totals,
+    )
 
     st.markdown("#### 今日營養總覽")
     st.dataframe(
@@ -1774,6 +1849,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
 
     for item in coach_feedback(totals, profile):
         st.info(item)
+    show_latest_meal_ai_notes(person_name, selected_date)
 
     text_tab, photo_tab = st.tabs(["文字輸入", "照片輸入"])
 
@@ -1796,7 +1872,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 try:
                     if get_openai_api_key():
                         with st.spinner("正在用 AI 估算文字餐食..."):
-                            estimate = analyze_meal_text(cleaned, meal_type_override)
+                            estimate = analyze_meal_text(cleaned, meal_type_override, meal_ai_context)
                         used_ai_estimate = True
                     else:
                         raise RuntimeError("尚未設定 OPENAI_API_KEY。")
@@ -1829,6 +1905,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                     f"纖維 {estimate['fiber_g']} g。"
                     f"{'AI ' if used_ai_estimate else ''}辨識：{estimate['matched']}。"
                 )
+                remember_meal_ai_notes(person_name, selected_date, estimate)
                 st.rerun()
 
     with photo_tab:
@@ -1864,6 +1941,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                             photo_file.getvalue(),
                             photo_file.type or "image/jpeg",
                             photo_meal_type,
+                            meal_ai_context,
                         )
                     save_meal_log(
                         {
@@ -1884,6 +1962,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
                         f"纖維 {estimate['fiber_g']} g。辨識：{estimate['matched']}。"
                     )
+                    remember_meal_ai_notes(person_name, selected_date, estimate)
                     st.rerun()
                 except json.JSONDecodeError:
                     st.error("照片辨識回傳格式不完整，請換一張更清楚的照片或改用文字輸入。")
@@ -1977,7 +2056,11 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                                 try:
                                     if get_openai_api_key():
                                         with st.spinner("正在用 AI 重新估算餐食..."):
-                                            estimate = analyze_meal_text(cleaned_description, edited_meal_type)
+                                            estimate = analyze_meal_text(
+                                                cleaned_description,
+                                                edited_meal_type,
+                                                meal_ai_context,
+                                            )
                                     else:
                                         raise RuntimeError("尚未設定 OPENAI_API_KEY。")
                                 except (RuntimeError, json.JSONDecodeError) as error:
@@ -2007,6 +2090,8 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                                     "confidence": "手動",
                                 }
                             update_meal_log(meal_id, update_values)
+                            if reestimate_edit:
+                                remember_meal_ai_notes(person_name, selected_date, estimate)
                             st.success("已更新。")
                             st.rerun()
 
@@ -2150,6 +2235,10 @@ def app() -> None:
 
     st.title(f"{selected_person} 的健康管理")
     st.caption(f"目前查看：{selected_person}")
+    st.markdown(
+        f"<div style='text-align: right; color: #8a8f98; font-size: 0.85rem;'>Ver. {APP_VERSION}</div>",
+        unsafe_allow_html=True,
+    )
 
     height_cm = get_person_height_cm(selected_person)
     targets = get_person_targets(selected_person)
