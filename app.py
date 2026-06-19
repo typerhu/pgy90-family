@@ -40,7 +40,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2205-R04"
+APP_VERSION = "Ver. PGY90-G1-260619-2217-R05"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1117,6 +1117,78 @@ def build_meal_ai_context(
     }
 
 
+def build_today_meal_status_context(
+    meals: pd.DataFrame,
+    selected_date: date,
+    totals: dict,
+    nutrition_targets: dict[str, float],
+) -> dict:
+    if meals.empty:
+        day_meals = meals
+    else:
+        day_meals = meals[meals["log_date"].dt.date == selected_date]
+
+    meal_counts = {meal_type: 0 for meal_type in MEAL_TYPES}
+    if not day_meals.empty:
+        for meal_type, count in day_meals["meal_type"].fillna("").value_counts().items():
+            if meal_type in meal_counts:
+                meal_counts[str(meal_type)] = int(count)
+
+    breakfast_count = meal_counts["早餐"]
+    lunch_count = meal_counts["午餐"]
+    dinner_count = meal_counts["晚餐"]
+    snack_count = meal_counts["點心"]
+    total_meals_count = int(sum(meal_counts.values()))
+    has_three_meals = breakfast_count > 0 and lunch_count > 0 and dinner_count > 0
+    has_multiple_snacks = snack_count >= 2
+
+    target_calories = float(nutrition_targets["calories"] or 0)
+    remaining_calories = target_calories - float(totals["calories"])
+    is_calorie_near_target = target_calories > 0 and remaining_calories <= max(200, target_calories * 0.10)
+    is_calorie_over_target = target_calories > 0 and remaining_calories < 0
+    is_fat_high = target_calories > 0 and float(totals["fat_g"]) * 9 >= target_calories * 0.35
+
+    wind_down_reasons = []
+    if has_three_meals:
+        wind_down_reasons.append("今日三餐已完整")
+    if has_three_meals and snack_count >= 1:
+        wind_down_reasons.append("三餐完整且已有點心")
+    if has_multiple_snacks:
+        wind_down_reasons.append("點心已達 2 次以上")
+    if is_calorie_near_target and not is_calorie_over_target:
+        wind_down_reasons.append("今日熱量已接近目標")
+    if is_calorie_over_target:
+        wind_down_reasons.append("今日熱量已超過目標")
+    if is_fat_high:
+        wind_down_reasons.append("今日脂肪比例偏高")
+
+    is_wind_down_mode = bool(
+        has_three_meals
+        or (has_three_meals and snack_count >= 1)
+        or (has_three_meals and is_calorie_near_target)
+        or is_calorie_over_target
+        or is_fat_high
+    )
+
+    return {
+        "total_meals_count": total_meals_count,
+        "breakfast_count": breakfast_count,
+        "lunch_count": lunch_count,
+        "dinner_count": dinner_count,
+        "snack_count": snack_count,
+        "has_breakfast": breakfast_count > 0,
+        "has_lunch": lunch_count > 0,
+        "has_dinner": dinner_count > 0,
+        "has_three_meals": has_three_meals,
+        "has_multiple_snacks": has_multiple_snacks,
+        "is_calorie_near_target": is_calorie_near_target,
+        "is_calorie_over_target": is_calorie_over_target,
+        "is_fat_high": is_fat_high,
+        "is_wind_down_mode": is_wind_down_mode,
+        "wind_down_reasons": "、".join(wind_down_reasons),
+    }
+
+
 def remember_meal_ai_notes(person_name: str, selected_date: date, estimate: dict) -> None:
     notes = {
         key: estimate[key]
@@ -1774,6 +1846,10 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
         nutrition_targets,
         totals,
     )
+    pre_meal_ai_context = {
+        **meal_ai_context,
+        **build_today_meal_status_context(meals, selected_date, totals, nutrition_targets),
+    }
 
     st.markdown("#### 今日營養總覽")
     st.dataframe(
@@ -1819,7 +1895,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                     with st.spinner("正在分析這餐怎麼選..."):
                         st.session_state[pre_meal_result_key] = analyze_pre_meal_text(
                             cleaned_pre_meal_text,
-                            meal_ai_context,
+                            pre_meal_ai_context,
                         )
                 except RuntimeError as error:
                     st.error(str(error))
@@ -1852,7 +1928,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         st.session_state[pre_meal_result_key] = analyze_pre_meal_photo(
                             pre_meal_photo.getvalue(),
                             pre_meal_photo.type or "image/jpeg",
-                            meal_ai_context,
+                            pre_meal_ai_context,
                             pre_meal_photo_note.strip()
                             or "請根據照片中的菜單、餐檯或食物選項提供餐前建議。",
                         )

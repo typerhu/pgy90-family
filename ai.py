@@ -232,12 +232,29 @@ def format_meal_context(coach_context: dict | None) -> str:
         ("remaining_calories", "今日剩餘熱量 kcal"),
         ("remaining_protein_g", "今日剩餘蛋白質 g"),
         ("remaining_fiber_g", "今日剩餘纖維 g"),
+        ("total_meals_count", "今日已記錄餐食總數"),
+        ("breakfast_count", "今日早餐數量"),
+        ("lunch_count", "今日午餐數量"),
+        ("dinner_count", "今日晚餐數量"),
+        ("snack_count", "今日點心數量"),
+        ("has_breakfast", "今日是否已有早餐"),
+        ("has_lunch", "今日是否已有午餐"),
+        ("has_dinner", "今日是否已有晚餐"),
+        ("has_three_meals", "今日是否三餐完整"),
+        ("has_multiple_snacks", "今日是否已有多次點心"),
+        ("is_calorie_near_target", "今日熱量是否接近目標"),
+        ("is_calorie_over_target", "今日熱量是否超過目標"),
+        ("is_fat_high", "今日脂肪是否偏高"),
+        ("is_wind_down_mode", "今日是否進入收尾模式"),
+        ("wind_down_reasons", "收尾模式原因"),
         ("preferences", "飲食偏好 / 禁忌 / 身體狀況"),
     ]
     lines = []
     for key, label in labels:
         value = coach_context.get(key)
         if value is not None and value != "":
+            if isinstance(value, bool):
+                value = "是" if value else "否"
             lines.append(f"- {label}: {value}")
     if not lines:
         return ""
@@ -331,6 +348,18 @@ def build_pre_meal_prompt(description: str, coach_context: dict | None, source_l
 如果蛋白質不足，優先推薦雞肉、魚、蛋、豆腐、瘦肉或希臘優格等選項。
 如果纖維不足，提醒補蔬菜、水果、豆類或菇類。
 如果今日脂肪偏高，提醒避開炸物、肥肉、奶茶、重醬或濃湯，並給可執行替代方案。
+
+請務必同時判斷今日餐次狀態：
+- 如果今日尚未吃正餐，可以正常建議如何選餐。
+- 如果今日已經三餐完整但點心不多，請提醒這已經不是主要補正餐，而是判斷是否真的需要加餐；若真的餓，選小份高蛋白、低油、低糖食物；若只是嘴饞，建議不吃或改喝水 / 無糖茶。
+- 如果今日已經三餐完整且點心 >= 2，快速結論要明確進入「收尾模式」：今天已經三餐加多次點心，現在不是再安排一餐，而是收尾。
+- 收尾模式時，如果不是明顯飢餓，建議停止進食，改喝水、無糖茶，或提早休息；如果真的餓，只選小份高蛋白低油食物，不再加主食、炸物、甜飲、奶茶或重醬。
+- 如果今日熱量還沒超標但脂肪已偏高，不要說「熱量偏高」；請說「今天熱量仍有空間，但脂肪已偏高」，並提醒避開炸物、肥肉、奶茶、濃湯、重醬。
+- 只有今日熱量接近目標時，才說「今天熱量空間不多」並建議控制份量。
+- 只有今日熱量已超過目標時，才說「今天熱量已超過目標」並建議進入收尾模式。
+- 如果蛋白質不足但今日已經三餐完整、熱量接近/超過目標或脂肪偏高，不要建議再吃完整正餐；請建議小份高蛋白低脂選項，例如水煮蛋白、無糖高蛋白飲、清湯豆腐、少油魚肉或少量雞胸肉。
+- 如果纖維不足但今日已經三餐完整，可以建議小份水果、水煮青菜、菇類或清燙蔬菜，但不要鼓勵再吃一大餐。
+- 可以直接說「今天已經三餐加多次點心，建議進入收尾模式」，但不要羞辱、責備或製造焦慮。
 
 使用者餐前輸入：
 {description}
