@@ -38,7 +38,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "2026/0619/2007"
+APP_VERSION = "2026/0619/2015"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -64,6 +64,11 @@ GOALS = ["減脂", "增肌", "維持"]
 BODY_SHAPE_GOALS = ["健康減脂", "精實有線條", "增肌維持"]
 GENDERS = ["男", "女", "不指定"]
 ACTIVITY_LEVELS = ["低活動", "一般活動", "較高活動"]
+ACTIVITY_CALORIE_MULTIPLIERS = {
+    "低活動": 28,
+    "一般活動": 31,
+    "較高活動": 34,
+}
 
 RESERVED_SECRET_NAMES = {
     "APP_PASSWORD",
@@ -1024,18 +1029,23 @@ def average_weight_last_days(df: pd.DataFrame, days: int = 7) -> float | None:
     return float(recent["weight_kg"].mean())
 
 
-def default_targets(weight_kg: float, goal: str) -> tuple[int, int, int]:
-    maintenance = int(round(weight_kg * 31))
+def maintenance_calories(weight_kg: float, activity_level: str) -> int:
+    multiplier = ACTIVITY_CALORIE_MULTIPLIERS.get(activity_level, ACTIVITY_CALORIE_MULTIPLIERS["一般活動"])
+    return int(round(weight_kg * multiplier))
+
+
+def default_targets(weight_kg: float, goal: str, activity_level: str = "一般活動") -> tuple[int, int, int]:
+    maintenance = maintenance_calories(weight_kg, activity_level)
     if goal == "減脂":
-        calories = maintenance - 400
+        calories = maintenance - min(int(round(maintenance * 0.15)), 500)
         protein = int(round(weight_kg * 1.8))
     elif goal == "增肌":
-        calories = maintenance + 250
+        calories = maintenance + min(int(round(maintenance * 0.10)), 350)
         protein = int(round(weight_kg * 1.7))
     else:
         calories = maintenance
         protein = int(round(weight_kg * 1.6))
-    return max(calories, 1500), protein, 28
+    return max(calories, 1500), protein, 30
 
 
 def recommended_body_targets(height_cm: float, body_shape_goal: str) -> dict[str, float]:
@@ -1702,28 +1712,42 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     average_week_weight = average_weight_last_days(df)
     current_weight = latest_log_weight or 75.0
     current_height = float(PROFILE["height_cm"])
+    current_activity_level = "一般活動"
     targets = get_person_targets(person_name)
-    default_calories, default_protein, default_fiber = default_targets(current_weight, "減脂")
+    default_calories, default_protein, default_fiber = default_targets(
+        current_weight,
+        "減脂",
+        current_activity_level,
+    )
 
     if profile is not None:
         current_goal = profile["goal"]
         current_height = float(profile["height_cm"] or current_height)
         current_weight = float(latest_log_weight or profile["current_weight_kg"] or current_weight)
-        default_calories = int(profile["daily_calorie_target"] or default_calories)
-        default_protein = int(profile["protein_target_g"] or default_protein)
-        default_fiber = int(profile["fiber_target_g"] or default_fiber)
         current_preferences = profile["preferences"] or ""
         current_gender = profile["gender"] if profile["gender"] in GENDERS else "不指定"
         current_birth_year = str(profile["birth_year"] or "")
         current_activity_level = (
             profile["activity_level"] if profile["activity_level"] in ACTIVITY_LEVELS else "一般活動"
         )
+        suggested_current_calories, suggested_current_protein, suggested_current_fiber = default_targets(
+            current_weight,
+            current_goal,
+            current_activity_level,
+        )
+        default_calories = int(profile["daily_calorie_target"] or suggested_current_calories)
+        default_protein = int(profile["protein_target_g"] or suggested_current_protein)
+        default_fiber = int(profile["fiber_target_g"] or suggested_current_fiber)
     else:
         current_goal = "減脂"
         current_preferences = "高蛋白、少油炸、外食可執行、亞洲食物優先"
         current_gender = "不指定"
         current_birth_year = ""
-        current_activity_level = "一般活動"
+        default_calories, default_protein, default_fiber = default_targets(
+            current_weight,
+            current_goal,
+            current_activity_level,
+        )
 
     with st.expander("個人目標與飲食偏好", expanded=profile is None):
         height_cm = st.number_input(
@@ -1815,7 +1839,12 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 format="%.1f",
                 width=120,
             )
-            suggested_calories, suggested_protein, suggested_fiber = default_targets(weight, goal)
+            suggested_calories, suggested_protein, suggested_fiber = default_targets(weight, goal, activity_level)
+            suggested_maintenance = maintenance_calories(weight, activity_level)
+            activity_multiplier = ACTIVITY_CALORIE_MULTIPLIERS.get(
+                activity_level,
+                ACTIVITY_CALORIE_MULTIPLIERS["一般活動"],
+            )
             calorie_target = st.number_input(
                 "每日熱量目標 kcal",
                 min_value=1000,
@@ -1824,7 +1853,11 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 step=50,
                 width=140,
             )
-            st.caption(f"建議估算：{suggested_calories} kcal / 日")
+            st.caption(
+                f"建議估算：{suggested_calories} kcal / 日；"
+                f"{activity_level} = 體重 × {activity_multiplier}，"
+                f"維持熱量約 {suggested_maintenance} kcal"
+            )
             protein_target = st.number_input(
                 "每日蛋白質目標 g",
                 min_value=40,
