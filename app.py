@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2239-R07"
+APP_VERSION = "Ver. PGY90-G1-260619-2301-R08"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -676,6 +676,7 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
             protein_target_g INTEGER,
             fiber_target_g INTEGER,
             preferences TEXT,
+            health_limitations TEXT,
             updated_at TEXT NOT NULL
         )
         """
@@ -695,6 +696,8 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE coach_profiles ADD COLUMN birth_year INTEGER")
     if "activity_level" not in coach_profile_columns:
         conn.execute("ALTER TABLE coach_profiles ADD COLUMN activity_level TEXT")
+    if "health_limitations" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN health_limitations TEXT")
 
     old_profile = conn.execute("SELECT * FROM coach_profile WHERE id = 1").fetchone()
     if old_profile:
@@ -703,8 +706,9 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
             INSERT OR IGNORE INTO coach_profiles (
                 person_name, goal, height_cm, target_weight_kg, target_body_fat_min,
                 target_body_fat_max, current_weight_kg, daily_calorie_target,
-                protein_target_g, fiber_target_g, preferences, gender, activity_level, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                protein_target_g, fiber_target_g, preferences, health_limitations,
+                gender, activity_level, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 DEFAULT_PERSON,
@@ -718,6 +722,7 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
                 old_profile["protein_target_g"],
                 old_profile["fiber_target_g"],
                 old_profile["preferences"],
+                "",
                 "不指定",
                 "一般活動",
                 old_profile["updated_at"],
@@ -992,11 +997,11 @@ def save_coach_profile(person_name: str, values: dict) -> None:
                 person_name, goal, height_cm, target_weight_kg, target_body_fat_min,
                 target_body_fat_max, current_weight_kg, daily_calorie_target,
                 protein_target_g, fiber_target_g, preferences, gender, birth_year,
-                activity_level, updated_at
+                activity_level, health_limitations, updated_at
             ) VALUES (:person_name, :goal, :height_cm, :target_weight_kg, :target_body_fat_min,
                 :target_body_fat_max, :current_weight_kg, :daily_calorie_target,
                 :protein_target_g, :fiber_target_g, :preferences, :gender, :birth_year,
-                :activity_level, :updated_at)
+                :activity_level, :health_limitations, :updated_at)
             ON CONFLICT(person_name) DO UPDATE SET
                 goal = excluded.goal,
                 height_cm = excluded.height_cm,
@@ -1011,6 +1016,7 @@ def save_coach_profile(person_name: str, values: dict) -> None:
                 gender = excluded.gender,
                 birth_year = excluded.birth_year,
                 activity_level = excluded.activity_level,
+                health_limitations = excluded.health_limitations,
                 updated_at = excluded.updated_at
             """,
             {
@@ -1105,6 +1111,7 @@ def build_meal_ai_context(
     totals: dict,
 ) -> dict:
     preferences = profile["preferences"] if profile else ""
+    health_limitations = profile["health_limitations"] if profile else ""
     goal = profile["goal"] if profile else "減脂"
     return {
         "person_name": person_name,
@@ -1131,6 +1138,7 @@ def build_meal_ai_context(
         "remaining_protein_g": round(float(nutrition_targets["protein_g"] - totals["protein_g"]), 1),
         "remaining_fiber_g": round(float(nutrition_targets["fiber_g"] - totals["fiber_g"]), 1),
         "preferences": preferences,
+        "health_limitations": health_limitations,
     }
 
 
@@ -1877,6 +1885,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
         current_height = float(profile["height_cm"] or current_height)
         current_weight = float(latest_log_weight or profile["current_weight_kg"] or current_weight)
         current_preferences = profile["preferences"] or ""
+        current_health_limitations = profile["health_limitations"] or ""
         current_gender = profile["gender"] if profile["gender"] in GENDERS else "不指定"
         current_birth_year = str(profile["birth_year"] or "")
         current_activity_level = (
@@ -1893,6 +1902,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     else:
         current_goal = "減脂"
         current_preferences = "高蛋白、少油炸、外食可執行、亞洲食物優先"
+        current_health_limitations = ""
         current_gender = "不指定"
         current_birth_year = ""
         default_calories, default_protein, default_fiber = default_targets(
@@ -2414,9 +2424,22 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             )
             st.caption(f"建議估算：{suggested_fiber} g / 日")
             preferences = st.text_area(
-                "飲食偏好 / 禁忌 / 身體狀況",
+                "飲食偏好 / 禁忌",
                 value=current_preferences,
                 height=90,
+            )
+            health_limitations = st.text_area(
+                "健康限制 / 身體狀況",
+                value=current_health_limitations,
+                height=100,
+                placeholder=(
+                    "例如：尿酸管理、血脂偏高、血壓需注意、曾有肝功能異常、"
+                    "右膝 ACL 術後，避免高衝擊訓練。"
+                ),
+                help=(
+                    "可填寫尿酸、血脂、血壓、肝功能、膝蓋、過敏、醫生交代事項等。"
+                    "AI 只會作一般健康管理建議，不作醫療診斷。"
+                ),
             )
             if st.form_submit_button("儲存偏好", use_container_width=True):
                 if target_body_fat_min > target_body_fat_max:
@@ -2445,6 +2468,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         "protein_target_g": protein_target,
                         "fiber_target_g": fiber_target,
                         "preferences": preferences.strip(),
+                        "health_limitations": health_limitations.strip(),
                         "gender": gender,
                         "birth_year": birth_year,
                         "activity_level": activity_level,
