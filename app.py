@@ -37,7 +37,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "2026/0619/1402"
+APP_VERSION = "2026/0619/1959"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -61,6 +61,8 @@ WORKOUT_TYPES = ["重訓", "有氧", "伸展", "球類", "步行", "休息", "�
 REHAB_TYPES = ["肩頸", "下背", "髖/腿", "膝蓋", "足踝", "全身活動度", "其他"]
 GOALS = ["減脂", "增肌", "維持"]
 BODY_SHAPE_GOALS = ["健康減脂", "精實有線條", "增肌維持"]
+GENDERS = ["男", "女", "不指定"]
+ACTIVITY_LEVELS = ["低活動", "一般活動", "較高活動"]
 
 RESERVED_SECRET_NAMES = {
     "APP_PASSWORD",
@@ -641,6 +643,9 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
             target_body_fat_min REAL,
             target_body_fat_max REAL,
             current_weight_kg REAL,
+            gender TEXT,
+            birth_year INTEGER,
+            activity_level TEXT,
             daily_calorie_target INTEGER,
             protein_target_g INTEGER,
             fiber_target_g INTEGER,
@@ -658,6 +663,12 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE coach_profiles ADD COLUMN target_body_fat_min REAL")
     if "target_body_fat_max" not in coach_profile_columns:
         conn.execute("ALTER TABLE coach_profiles ADD COLUMN target_body_fat_max REAL")
+    if "gender" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN gender TEXT")
+    if "birth_year" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN birth_year INTEGER")
+    if "activity_level" not in coach_profile_columns:
+        conn.execute("ALTER TABLE coach_profiles ADD COLUMN activity_level TEXT")
 
     old_profile = conn.execute("SELECT * FROM coach_profile WHERE id = 1").fetchone()
     if old_profile:
@@ -666,8 +677,8 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
             INSERT OR IGNORE INTO coach_profiles (
                 person_name, goal, height_cm, target_weight_kg, target_body_fat_min,
                 target_body_fat_max, current_weight_kg, daily_calorie_target,
-                protein_target_g, fiber_target_g, preferences, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                protein_target_g, fiber_target_g, preferences, gender, activity_level, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 DEFAULT_PERSON,
@@ -681,6 +692,8 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
                 old_profile["protein_target_g"],
                 old_profile["fiber_target_g"],
                 old_profile["preferences"],
+                "不指定",
+                "一般活動",
                 old_profile["updated_at"],
             ),
         )
@@ -952,10 +965,12 @@ def save_coach_profile(person_name: str, values: dict) -> None:
             INSERT INTO coach_profiles (
                 person_name, goal, height_cm, target_weight_kg, target_body_fat_min,
                 target_body_fat_max, current_weight_kg, daily_calorie_target,
-                protein_target_g, fiber_target_g, preferences, updated_at
+                protein_target_g, fiber_target_g, preferences, gender, birth_year,
+                activity_level, updated_at
             ) VALUES (:person_name, :goal, :height_cm, :target_weight_kg, :target_body_fat_min,
                 :target_body_fat_max, :current_weight_kg, :daily_calorie_target,
-                :protein_target_g, :fiber_target_g, :preferences, :updated_at)
+                :protein_target_g, :fiber_target_g, :preferences, :gender, :birth_year,
+                :activity_level, :updated_at)
             ON CONFLICT(person_name) DO UPDATE SET
                 goal = excluded.goal,
                 height_cm = excluded.height_cm,
@@ -967,6 +982,9 @@ def save_coach_profile(person_name: str, values: dict) -> None:
                 protein_target_g = excluded.protein_target_g,
                 fiber_target_g = excluded.fiber_target_g,
                 preferences = excluded.preferences,
+                gender = excluded.gender,
+                birth_year = excluded.birth_year,
+                activity_level = excluded.activity_level,
                 updated_at = excluded.updated_at
             """,
             {
@@ -1059,6 +1077,9 @@ def build_meal_ai_context(
     goal = profile["goal"] if profile else "減脂"
     return {
         "person_name": person_name,
+        "gender": profile["gender"] if profile and profile["gender"] else "不指定",
+        "birth_year": profile["birth_year"] if profile and profile["birth_year"] else "",
+        "activity_level": profile["activity_level"] if profile and profile["activity_level"] else "一般活動",
         "goal": goal,
         "current_weight_kg": round(float(current_weight), 1),
         "target_weight_kg": round(float(targets["target_weight_kg"]), 1),
@@ -1674,9 +1695,17 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
         default_protein = int(profile["protein_target_g"] or default_protein)
         default_fiber = int(profile["fiber_target_g"] or default_fiber)
         current_preferences = profile["preferences"] or ""
+        current_gender = profile["gender"] if profile["gender"] in GENDERS else "不指定"
+        current_birth_year = str(profile["birth_year"] or "")
+        current_activity_level = (
+            profile["activity_level"] if profile["activity_level"] in ACTIVITY_LEVELS else "一般活動"
+        )
     else:
         current_goal = "減脂"
         current_preferences = "高蛋白、少油炸、外食可執行、亞洲食物優先"
+        current_gender = "不指定"
+        current_birth_year = ""
+        current_activity_level = "一般活動"
 
     with st.expander("個人目標與飲食偏好", expanded=profile is None):
         height_cm = st.number_input(
@@ -1706,6 +1735,22 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             st.rerun()
 
         with st.form("coach_profile_form"):
+            gender = st.selectbox(
+                "性別",
+                GENDERS,
+                index=GENDERS.index(current_gender),
+            )
+            birth_year_text = st.text_input(
+                "出生年份",
+                value=current_birth_year,
+                max_chars=4,
+                placeholder="例：1980，可留空",
+            )
+            activity_level = st.selectbox(
+                "活動量",
+                ACTIVITY_LEVELS,
+                index=ACTIVITY_LEVELS.index(current_activity_level),
+            )
             goal = st.selectbox(
                 "目前目標",
                 GOALS,
@@ -1789,6 +1834,16 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 if target_body_fat_min > target_body_fat_max:
                     st.warning("目標體脂下限不能高於上限。")
                     st.stop()
+                cleaned_birth_year = birth_year_text.strip()
+                birth_year = None
+                if cleaned_birth_year:
+                    if not cleaned_birth_year.isdigit():
+                        st.warning("出生年份請輸入 4 位數字，或留空。")
+                        st.stop()
+                    birth_year = int(cleaned_birth_year)
+                    if birth_year < 1900 or birth_year > date.today().year:
+                        st.warning("出生年份看起來不合理，請確認後再儲存。")
+                        st.stop()
                 save_coach_profile(
                     person_name,
                     {
@@ -1802,6 +1857,9 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         "protein_target_g": protein_target,
                         "fiber_target_g": fiber_target,
                         "preferences": preferences.strip(),
+                        "gender": gender,
+                        "birth_year": birth_year,
+                        "activity_level": activity_level,
                     }
                 )
                 st.session_state.pop(f"target_weight_{person_name}", None)

@@ -212,6 +212,9 @@ def format_meal_context(coach_context: dict | None) -> str:
         return ""
     labels = [
         ("person_name", "使用者"),
+        ("gender", "性別"),
+        ("birth_year", "出生年份"),
+        ("activity_level", "活動量"),
         ("goal", "目前目標"),
         ("current_weight_kg", "目前體重 kg"),
         ("target_weight_kg", "目標體重 kg"),
