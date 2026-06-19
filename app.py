@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2311-R09"
+APP_VERSION = "Ver. PGY90-G1-260619-2323-R10"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1833,6 +1833,54 @@ def trend_page(df: pd.DataFrame, height_cm: float) -> None:
     st.caption("睡眠")
     st.bar_chart(recent.set_index("log_date")[["sleep_hours"]], height=220)
 
+    st.markdown("### 血壓 / 脈搏趨勢")
+    bp_columns = ["systolic_bp", "diastolic_bp", "pulse_bpm"]
+    available_bp_columns = [column for column in bp_columns if column in recent.columns]
+    if available_bp_columns:
+        bp_recent = recent[["log_date", *available_bp_columns]].copy()
+        for column in available_bp_columns:
+            bp_recent[column] = pd.to_numeric(bp_recent[column], errors="coerce")
+            bp_recent.loc[bp_recent[column] <= 0, column] = pd.NA
+
+        bp_has_data = {
+            column: bp_recent[column].notna().any()
+            for column in available_bp_columns
+        }
+        bp_valid_rows = bp_recent[
+            bp_recent[available_bp_columns].notna().any(axis=1)
+        ].sort_values("log_date", ascending=False)
+        if bp_has_data.get("systolic_bp") or bp_has_data.get("diastolic_bp"):
+            st.markdown("#### 血壓趨勢")
+            pressure_columns = [
+                column
+                for column in ["systolic_bp", "diastolic_bp"]
+                if bp_has_data.get(column)
+            ]
+            st.line_chart(bp_recent.set_index("log_date")[pressure_columns], height=240)
+        if bp_has_data.get("pulse_bpm"):
+            st.markdown("#### 脈搏趨勢")
+            st.line_chart(bp_recent.set_index("log_date")[["pulse_bpm"]], height=220)
+        if len(bp_valid_rows) == 1:
+            st.info("目前已有 1 筆血壓 / 脈搏紀錄；累積更多日期後，趨勢線會更明顯。")
+        if not bp_valid_rows.empty:
+            st.dataframe(
+                bp_valid_rows[["log_date", *available_bp_columns]].rename(
+                    columns={
+                        "log_date": "日期",
+                        "systolic_bp": "收縮壓 mmHg",
+                        "diastolic_bp": "舒張壓 mmHg",
+                        "pulse_bpm": "脈搏 bpm",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        if not any(bp_has_data.values()):
+            st.info("尚無血壓 / 脈搏紀錄。可先到「每日輸入」新增資料。")
+    else:
+        st.info("尚無血壓 / 脈搏紀錄。可先到「每日輸入」新增資料。")
+    st.caption("血壓與脈搏趨勢僅作健康管理追蹤，不作醫療診斷。")
+
     st.caption("運動分鐘")
     st.bar_chart(recent.set_index("log_date")[["workout_minutes"]], height=220)
 
@@ -1847,6 +1895,9 @@ def trend_page(df: pd.DataFrame, height_cm: float) -> None:
         "weight_kg",
         "body_fat_percent",
         "waist_cm",
+        "systolic_bp",
+        "diastolic_bp",
+        "pulse_bpm",
         "sleep_hours",
         "food_category",
         "workout_type",
