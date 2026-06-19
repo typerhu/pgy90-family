@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hmac
 import hashlib
+import inspect
 import json
 import os
 import sqlite3
@@ -37,7 +38,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "2026/0619/1959"
+APP_VERSION = "2026/0619/2007"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1126,6 +1127,23 @@ def show_latest_meal_ai_notes(person_name: str, selected_date: date) -> None:
             st.info(note)
 
 
+def analyze_meal_text_with_context(description: str, meal_type_override: str, coach_context: dict) -> dict:
+    if "coach_context" in inspect.signature(analyze_meal_text).parameters:
+        return analyze_meal_text(description, meal_type_override, coach_context)
+    return analyze_meal_text(description, meal_type_override)
+
+
+def analyze_meal_photo_with_context(
+    image_bytes: bytes,
+    mime_type: str,
+    meal_type_override: str,
+    coach_context: dict,
+) -> dict:
+    if "coach_context" in inspect.signature(analyze_meal_photo).parameters:
+        return analyze_meal_photo(image_bytes, mime_type, meal_type_override, coach_context)
+    return analyze_meal_photo(image_bytes, mime_type, meal_type_override)
+
+
 # Reports
 
 def week_window(selected: date) -> WeekWindow:
@@ -1930,7 +1948,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 try:
                     if get_openai_api_key():
                         with st.spinner("正在用 AI 估算文字餐食..."):
-                            estimate = analyze_meal_text(cleaned, meal_type_override, meal_ai_context)
+                            estimate = analyze_meal_text_with_context(cleaned, meal_type_override, meal_ai_context)
                         used_ai_estimate = True
                     else:
                         raise RuntimeError("尚未設定 OPENAI_API_KEY。")
@@ -1995,7 +2013,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             else:
                 try:
                     with st.spinner("正在辨識餐食照片..."):
-                        estimate = analyze_meal_photo(
+                        estimate = analyze_meal_photo_with_context(
                             photo_file.getvalue(),
                             photo_file.type or "image/jpeg",
                             photo_meal_type,
@@ -2114,7 +2132,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                                 try:
                                     if get_openai_api_key():
                                         with st.spinner("正在用 AI 重新估算餐食..."):
-                                            estimate = analyze_meal_text(
+                                            estimate = analyze_meal_text_with_context(
                                                 cleaned_description,
                                                 edited_meal_type,
                                                 meal_ai_context,
