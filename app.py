@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2301-R08"
+APP_VERSION = "Ver. PGY90-G1-260619-2311-R09"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -99,6 +99,9 @@ RESERVED_SECRET_NAMES = {
 }
 
 DAILY_LOG_MIGRATIONS = {
+    "systolic_bp": "INTEGER",
+    "diastolic_bp": "INTEGER",
+    "pulse_bpm": "INTEGER",
     "breakfast_category": "TEXT",
     "breakfast_notes": "TEXT",
     "lunch_category": "TEXT",
@@ -585,6 +588,9 @@ def ensure_family_schema(conn: sqlite3.Connection) -> None:
                 weight_kg REAL,
                 body_fat_percent REAL,
                 waist_cm REAL,
+                systolic_bp INTEGER,
+                diastolic_bp INTEGER,
+                pulse_bpm INTEGER,
                 sleep_hours REAL,
                 sleep_quality INTEGER,
                 food_category TEXT,
@@ -739,6 +745,9 @@ def init_db() -> None:
                 weight_kg REAL,
                 body_fat_percent REAL,
                 waist_cm REAL,
+                systolic_bp INTEGER,
+                diastolic_bp INTEGER,
+                pulse_bpm INTEGER,
                 sleep_hours REAL,
                 sleep_quality INTEGER,
                 food_category TEXT,
@@ -887,6 +896,9 @@ def upsert_daily_log(values: dict) -> None:
                 SET weight_kg = :weight_kg,
                     body_fat_percent = :body_fat_percent,
                     waist_cm = :waist_cm,
+                    systolic_bp = :systolic_bp,
+                    diastolic_bp = :diastolic_bp,
+                    pulse_bpm = :pulse_bpm,
                     sleep_hours = :sleep_hours,
                     sleep_quality = :sleep_quality,
                     food_category = :food_category,
@@ -921,6 +933,7 @@ def upsert_daily_log(values: dict) -> None:
                 """
                 INSERT INTO daily_logs (
                     person_name, log_date, weight_kg, body_fat_percent, waist_cm,
+                    systolic_bp, diastolic_bp, pulse_bpm,
                     sleep_hours, sleep_quality, food_category, food_notes,
                     breakfast_category, breakfast_notes, lunch_category,
                     lunch_notes, dinner_category, dinner_notes, snack_notes,
@@ -931,6 +944,7 @@ def upsert_daily_log(values: dict) -> None:
                     created_at, updated_at
                 ) VALUES (
                     :person_name, :log_date, :weight_kg, :body_fat_percent, :waist_cm,
+                    :systolic_bp, :diastolic_bp, :pulse_bpm,
                     :sleep_hours, :sleep_quality, :food_category, :food_notes,
                     :breakfast_category, :breakfast_notes, :lunch_category,
                     :lunch_notes, :dinner_category, :dinner_notes, :snack_notes,
@@ -1585,6 +1599,33 @@ def daily_input_page(person_name: str) -> None:
             width=120,
         )
 
+    st.markdown("#### 血壓 / 脈搏")
+    systolic_bp = st.number_input(
+        "收縮壓 mmHg",
+        min_value=0,
+        max_value=250,
+        value=int(existing_value("systolic_bp", 0)),
+        step=1,
+        width=120,
+    )
+    diastolic_bp = st.number_input(
+        "舒張壓 mmHg",
+        min_value=0,
+        max_value=180,
+        value=int(existing_value("diastolic_bp", 0)),
+        step=1,
+        width=120,
+    )
+    pulse_bpm = st.number_input(
+        "脈搏 bpm",
+        min_value=0,
+        max_value=220,
+        value=int(existing_value("pulse_bpm", 0)),
+        step=1,
+        width=120,
+    )
+    st.caption("血壓紀錄僅作健康管理追蹤，不作醫療診斷；若數值異常或有不適，請諮詢醫師。")
+
     st.markdown("#### 睡眠")
     existing_sleep_hours = existing_value("sleep_hours", None)
     existing_sleep_quality = existing_value("sleep_quality", None)
@@ -1737,6 +1778,9 @@ def daily_input_page(person_name: str) -> None:
                 "weight_kg": weight,
                 "body_fat_percent": body_fat,
                 "waist_cm": waist if waist_measured else None,
+                "systolic_bp": systolic_bp or None,
+                "diastolic_bp": diastolic_bp or None,
+                "pulse_bpm": pulse_bpm or None,
                 "sleep_hours": sleep_hour_part + (sleep_minute_part / 60)
                 if sleep_recorded
                 else None,
