@@ -40,7 +40,7 @@ from meals import (
 # Imports / Config
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2129-R03"
+APP_VERSION = "Ver. PGY90-G1-260619-2205-R04"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
