@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2323-R10"
+APP_VERSION = "Ver. PGY90-G1-260619-2334-R11"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -77,7 +77,27 @@ PROFILE = {
 }
 
 FOOD_CATEGORIES = ["均衡", "高蛋白", "外食", "應酬", "偏清淡", "偏油/甜", "其他"]
-WORKOUT_TYPES = ["重訓", "有氧", "伸展", "球類", "步行", "休息", "其他"]
+WORKOUT_TYPES = [
+    "休息 Rest",
+    "重訓 Strength Training",
+    "有氧 Cardio",
+    "飛輪 Spinning",
+    "乒乓 Table Tennis",
+    "步行 Walking",
+    "伸展 Mobility",
+    "復健 Rehab",
+    "其他 Other",
+]
+WORKOUT_TYPE_LABELS = {
+    "休息": "休息 Rest",
+    "重訓": "重訓 Strength Training",
+    "有氧": "有氧 Cardio",
+    "球類": "乒乓 Table Tennis",
+    "步行": "步行 Walking",
+    "伸展": "伸展 Mobility",
+    "復健": "復健 Rehab",
+    "其他": "其他 Other",
+}
 REHAB_TYPES = ["肩頸", "下背", "髖/腿", "膝蓋", "足踝", "全身活動度", "其他"]
 GOALS = ["減脂", "增肌", "維持"]
 BODY_SHAPE_GOALS = ["健康減脂", "精實有線條", "增肌維持"]
@@ -1536,6 +1556,7 @@ def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
 
 def daily_input_page(person_name: str) -> None:
     st.subheader(f"{person_name}｜每日輸入")
+    st.markdown("#### 日期")
     selected_date = st.date_input("日期", value=date.today())
     existing = get_daily_log(person_name, selected_date)
 
@@ -1544,7 +1565,9 @@ def daily_input_page(person_name: str) -> None:
             return fallback
         return existing[key]
 
+    st.markdown("---")
     st.markdown("#### 身體指標")
+    st.caption("有量才填，沒量可留空。")
     existing_weight = existing_value("weight_kg", None)
     weight_measured = st.checkbox(
         "今天有量體重",
@@ -1599,6 +1622,7 @@ def daily_input_page(person_name: str) -> None:
             width=120,
         )
 
+    st.markdown("---")
     st.markdown("#### 血壓 / 脈搏")
     systolic_bp = st.number_input(
         "收縮壓 mmHg",
@@ -1626,7 +1650,9 @@ def daily_input_page(person_name: str) -> None:
     )
     st.caption("血壓紀錄僅作健康管理追蹤，不作醫療診斷；若數值異常或有不適，請諮詢醫師。")
 
-    st.markdown("#### 睡眠")
+    st.markdown("---")
+    st.markdown("#### 睡眠與恢復")
+    st.caption("睡眠不足時，運動強度建議保守一點。")
     existing_sleep_hours = existing_value("sleep_hours", None)
     existing_sleep_quality = existing_value("sleep_quality", None)
     sleep_recorded = st.checkbox(
@@ -1665,7 +1691,9 @@ def daily_input_page(person_name: str) -> None:
             step=1,
         )
 
-    st.markdown("#### 飲食")
+    st.markdown("---")
+    st.markdown("#### 飲食紀錄狀態")
+    st.caption("詳細餐食請在 AI 飲食教練中記錄。")
     existing_food_category = existing_value("food_category", "")
     food_recorded = st.checkbox(
         "有記錄飲食總評",
@@ -1691,14 +1719,18 @@ def daily_input_page(person_name: str) -> None:
     food_notes = existing_value("food_notes", "")
 
     with st.form("daily_log_form"):
-        st.markdown("#### 運動")
+        st.markdown("---")
+        st.markdown("#### 運動 / 訓練")
+        current_workout_type = existing_value("workout_type", "休息 Rest")
+        workout_type_display = WORKOUT_TYPE_LABELS.get(current_workout_type, current_workout_type)
+        workout_type_options = list(WORKOUT_TYPES)
+        if workout_type_display not in workout_type_options:
+            workout_type_options.append(workout_type_display)
 
         workout_type = st.selectbox(
-            "運動類型",
-            WORKOUT_TYPES,
-            index=WORKOUT_TYPES.index(existing_value("workout_type", "休息"))
-            if existing_value("workout_type", "休息") in WORKOUT_TYPES
-            else 0,
+            "運動分類 / 運動類型",
+            workout_type_options,
+            index=workout_type_options.index(workout_type_display),
         )
         workout_minutes = st.number_input(
             "運動分鐘",
@@ -1751,6 +1783,9 @@ def daily_input_page(person_name: str) -> None:
         )
 
         workout_notes = st.text_area("運動內容", value=existing_value("workout_notes", ""), height=80)
+        st.markdown("---")
+        st.markdown("#### 疼痛、疲勞與復健")
+        st.caption("若膝蓋、腰、肩或疲勞明顯，請記錄下來，之後可作為訓練調整依據。")
         discomfort_notes = st.text_area(
             "疼痛 / 不適 / 疲勞",
             value=existing_value("discomfort_notes", ""),
@@ -1766,7 +1801,14 @@ def daily_input_page(person_name: str) -> None:
             else 0,
         )
         rehab_notes = st.text_area("復健記錄", value=existing_value("rehab_notes", ""), height=70)
-        notes = st.text_area("備註", value=existing_value("notes", ""), height=80)
+        st.markdown("---")
+        st.markdown("#### 備註")
+        notes = st.text_area(
+            "備註",
+            value=existing_value("notes", ""),
+            height=80,
+            placeholder="例如：今天比較累、外食較多、膝蓋微酸、精神狀態不錯。",
+        )
 
         submitted = st.form_submit_button("儲存今日紀錄", use_container_width=True)
 
