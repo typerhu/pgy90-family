@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 
-APP_TIMEZONE = ZoneInfo("Asia/Kuching")
+APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 OPENAI_TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504, 520, 522, 524}
 
 FOOD_ESTIMATES = {

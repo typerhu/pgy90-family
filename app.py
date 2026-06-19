@@ -57,14 +57,36 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2334-R11"
-APP_TIMEZONE = ZoneInfo("Asia/Kuching")
+APP_VERSION = "Ver. PGY90-G1-260620-0722-R12"
+APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
 REMEMBER_DAYS = 30
 REMEMBER_DISABLED_KEY = "remember_login_disabled"
 REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
 REGISTRATION_SUCCESS_KEY = "registration_success_message"
+
+
+def get_local_today() -> date:
+    return datetime.now(APP_TIMEZONE).date()
+
+
+def prepare_local_date_input_state(date_key: str) -> date:
+    local_today = get_local_today()
+    today_state_key = f"{date_key}_local_today"
+
+    if today_state_key not in st.session_state:
+        st.session_state[today_state_key] = local_today
+    if date_key not in st.session_state:
+        st.session_state[date_key] = local_today
+
+    previous_today = st.session_state[today_state_key]
+    if previous_today != local_today:
+        if st.session_state.get(date_key) == previous_today:
+            st.session_state[date_key] = local_today
+        st.session_state[today_state_key] = local_today
+
+    return local_today
 
 
 # Constants / Defaults
@@ -1082,7 +1104,7 @@ def latest_weight_from_logs(df: pd.DataFrame) -> float | None:
 def average_weight_last_days(df: pd.DataFrame, days: int = 7) -> float | None:
     if df.empty or "weight_kg" not in df or "log_date" not in df:
         return None
-    cutoff = pd.Timestamp(date.today() - timedelta(days=days - 1))
+    cutoff = pd.Timestamp(get_local_today() - timedelta(days=days - 1))
     recent = df[df["log_date"] >= cutoff].dropna(subset=["weight_kg"])
     if recent.empty:
         return None
@@ -1557,7 +1579,10 @@ def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
 def daily_input_page(person_name: str) -> None:
     st.subheader(f"{person_name}｜每日輸入")
     st.markdown("#### 日期")
-    selected_date = st.date_input("日期", value=date.today())
+    daily_date_key = f"daily_input_date_{person_name}"
+    local_today = prepare_local_date_input_state(daily_date_key)
+    selected_date = st.date_input("日期", key=daily_date_key)
+    st.caption(f"本地日期：{local_today.strftime('%Y/%m/%d')}（Asia/Kuala_Lumpur）")
     existing = get_daily_log(person_name, selected_date)
 
     def existing_value(key: str, fallback):
@@ -1864,7 +1889,7 @@ def trend_page(df: pd.DataFrame, height_cm: float) -> None:
     metric_cards(df, height_cm)
 
     days = st.slider("顯示最近幾天", 7, 180, 60, step=7)
-    cutoff = pd.Timestamp(date.today() - timedelta(days=days - 1))
+    cutoff = pd.Timestamp(get_local_today() - timedelta(days=days - 1))
     recent = df[df["log_date"] >= cutoff]
 
     st.line_chart(
@@ -1962,7 +1987,9 @@ def trend_page(df: pd.DataFrame, height_cm: float) -> None:
 
 def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
     st.subheader(f"{person_name}｜每週報告")
-    selected = st.date_input("選擇週內任一天", value=date.today(), key="weekly_date")
+    weekly_date_key = f"weekly_date_{person_name}"
+    prepare_local_date_input_state(weekly_date_key)
+    selected = st.date_input("選擇週內任一天", key=weekly_date_key)
     window = week_window(selected)
     st.caption(f"週期：{window.start.isoformat()} 至 {window.end.isoformat()}")
     targets = get_person_targets(person_name)
@@ -2048,7 +2075,9 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             current_activity_level,
         )
 
-    selected_date = st.date_input("記錄日期", value=date.today(), key="coach_date")
+    coach_date_key = f"coach_date_{person_name}"
+    prepare_local_date_input_state(coach_date_key)
+    selected_date = st.date_input("記錄日期", key=coach_date_key)
     meals = load_meals(person_name)
     totals = daily_meal_totals(meals, selected_date)
     profile = get_coach_profile(person_name)
@@ -2426,7 +2455,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
 
     st.markdown("#### 最近飲食趨勢")
     if not meals.empty:
-        recent = meals[meals["log_date"] >= pd.Timestamp(date.today() - timedelta(days=13))]
+        recent = meals[meals["log_date"] >= pd.Timestamp(get_local_today() - timedelta(days=13))]
         if not recent.empty:
             daily = recent.groupby("log_date", as_index=False)[
                 ["calories", "protein_g", "fiber_g"]
@@ -2589,7 +2618,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         st.warning("出生年份請輸入 4 位數字，或留空。")
                         st.stop()
                     birth_year = int(cleaned_birth_year)
-                    if birth_year < 1900 or birth_year > date.today().year:
+                    if birth_year < 1900 or birth_year > get_local_today().year:
                         st.warning("出生年份看起來不合理，請確認後再儲存。")
                         st.stop()
                 save_coach_profile(
