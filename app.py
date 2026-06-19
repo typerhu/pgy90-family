@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2220-R06"
+APP_VERSION = "Ver. PGY90-G1-260619-2239-R07"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1206,6 +1206,65 @@ def build_today_meal_status_context(
     }
 
 
+def extract_post_meal_draft_from_pre_meal_analysis(analysis_text: str) -> str:
+    fields = {
+        "主食": "",
+        "蛋白質": "",
+        "蔬菜 / 纖維": "",
+        "湯 / 飲料": "",
+        "醬料 / 油脂": "",
+    }
+    in_suggestion_section = False
+
+    for raw_line in analysis_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        heading = line.lstrip("#").strip()
+        if heading == "建議吃法":
+            in_suggestion_section = True
+            continue
+        if in_suggestion_section and line.startswith("#"):
+            break
+        if not in_suggestion_section:
+            continue
+
+        cleaned = line.lstrip("*-0123456789. ").strip().strip("*")
+        if "：" in cleaned:
+            label, value = cleaned.split("：", 1)
+        elif ":" in cleaned:
+            label, value = cleaned.split(":", 1)
+        else:
+            continue
+        normalized_label = label.strip().replace("／", "/").replace(" ", "")
+        for field in fields:
+            if normalized_label.startswith(field.replace(" ", "")):
+                fields[field] = value.strip()
+                break
+
+    parsed_any = any(fields.values())
+    lines = ["今天實際吃了："]
+    lines.extend(f"{field}：{value}" for field, value in fields.items())
+    if parsed_any:
+        lines.append("備註：由餐前分析轉入，請依實際吃的內容修改後再估算。")
+    else:
+        summary_lines = []
+        for raw_line in analysis_text.splitlines():
+            line = raw_line.strip().lstrip("#").strip()
+            if line:
+                summary_lines.append(line)
+            if len(summary_lines) >= 6:
+                break
+        summary = " / ".join(summary_lines)
+        lines.append(
+            "備註：由餐前分析轉入，但未能完整解析建議吃法；"
+            "請依實際吃的內容修改後再估算。"
+        )
+        if summary:
+            lines.append(f"餐前分析摘要：{summary}")
+    return "\n".join(lines)
+
+
 def remember_meal_ai_notes(person_name: str, selected_date: date, estimate: dict) -> None:
     notes = {
         key: estimate[key]
@@ -1889,6 +1948,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
 
     st.markdown("#### 餐前分析")
     pre_meal_result_key = f"pre_meal_analysis_result_{person_name}"
+    meal_text_input_key = f"meal_text_input_{person_name}"
     pre_text_tab, pre_photo_tab = st.tabs(["文字分析", "圖片分析"])
 
     with pre_text_tab:
@@ -1955,6 +2015,11 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     if st.session_state.get(pre_meal_result_key):
         st.markdown("#### 餐前分析結果")
         st.markdown(st.session_state[pre_meal_result_key])
+        if st.button("轉入餐後紀錄草稿", use_container_width=True, key=f"pre_meal_to_post_draft_{person_name}"):
+            st.session_state[meal_text_input_key] = extract_post_meal_draft_from_pre_meal_analysis(
+                st.session_state[pre_meal_result_key]
+            )
+            st.success("已轉入餐後輸入框，請確認實際吃的內容後再估算加入紀錄。")
 
     text_tab, photo_tab = st.tabs(["文字輸入", "照片輸入"])
 
@@ -1964,6 +2029,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 "用一句話記錄飲食",
                 placeholder="例：午餐吃海南雞飯加一顆蛋，喝無糖拿鐵",
                 height=110,
+                key=meal_text_input_key,
             )
             meal_type_override = st.selectbox("餐別", ["自動判斷", "早餐", "午餐", "晚餐", "點心"])
             submitted = st.form_submit_button("估算並加入今日紀錄", use_container_width=True)
