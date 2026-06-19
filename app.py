@@ -16,16 +16,7 @@ import pandas as pd
 import extra_streamlit_components as stx
 import streamlit as st
 
-from ai import (
-    MEAL_TYPES,
-    analyze_meal_photo,
-    analyze_meal_text,
-    analyze_pre_meal_photo,
-    analyze_pre_meal_text,
-    detect_meal_type,
-    estimate_nutrition,
-    get_openai_api_key,
-)
+import ai as meal_ai
 from db import DB_PATH, DATA_DIR, connect, table_columns
 from meals import (
     coach_feedback,
@@ -39,8 +30,34 @@ from meals import (
 
 # Imports / Config
 
+MEAL_TYPES = getattr(meal_ai, "MEAL_TYPES", ["早餐", "午餐", "晚餐", "點心"])
+analyze_meal_photo = meal_ai.analyze_meal_photo
+analyze_meal_text = meal_ai.analyze_meal_text
+detect_meal_type = meal_ai.detect_meal_type
+estimate_nutrition = meal_ai.estimate_nutrition
+get_openai_api_key = meal_ai.get_openai_api_key
+
+
+def _missing_ai_feature(feature_name: str):
+    def fallback(*_args, **_kwargs):
+        raise RuntimeError(f"AI 模組尚未提供 {feature_name}，請重新部署最新版本後再試。")
+
+    return fallback
+
+
+analyze_pre_meal_photo = getattr(
+    meal_ai,
+    "analyze_pre_meal_photo",
+    _missing_ai_feature("餐前圖片分析"),
+)
+analyze_pre_meal_text = getattr(
+    meal_ai,
+    "analyze_pre_meal_text",
+    _missing_ai_feature("餐前文字分析"),
+)
+
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260619-2217-R05"
+APP_VERSION = "Ver. PGY90-G1-260619-2220-R06"
 APP_TIMEZONE = ZoneInfo("Asia/Kuching")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
