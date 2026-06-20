@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-0744-R13"
+APP_VERSION = "Ver. PGY90-G1-260620-0932-R14"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1430,82 +1430,124 @@ def apply_ui_style() -> None:
 
 
 def generate_weekly_summary(week_df: pd.DataFrame, window: WeekWindow, targets: dict[str, float]) -> str:
+    def latest_note(column: str) -> str:
+        if week_df.empty or column not in week_df.columns:
+            return ""
+        for _, row in week_df.sort_values("log_date", ascending=False).iterrows():
+            note = str(row.get(column) or "").strip()
+            if note:
+                return note[:80] + ("..." if len(note) > 80 else "")
+        return ""
+
     if week_df.empty:
-        return (
-            f"{window.start.isoformat()} 至 {window.end.isoformat()} 尚無紀錄。"
-            "本週先以建立連續記錄習慣為主。"
+        return "\n".join(
+            [
+                f"週期：{window.start.isoformat()} 至 {window.end.isoformat()}",
+                "",
+                "本週健康摘要：",
+                "- 本週記錄 0 天。",
+                "- 本週身體指標資料不足。",
+                "- 本週睡眠資料不足。",
+                "- 本週血壓 / 脈搏資料不足。",
+                "- 本週運動資料不足。",
+                "- 本週復健 / 活動度訓練資料不足。",
+                "- 疼痛 / 疲勞紀錄：無。",
+                "",
+                "下週留意：",
+                "- 繼續穩定記錄體重、睡眠、血壓與運動。",
+                "- 若睡眠不足或疲勞增加，運動強度可先保守。",
+                "- 若疼痛或不適持續，請以安全與專業建議為優先。",
+                "",
+                "本週總結僅作健康管理追蹤，不作醫療診斷。",
+            ]
         )
 
     recorded_days = len(week_df)
-    latest = week_df.sort_values("log_date").iloc[-1]
-    weight_avg = week_df["weight_kg"].dropna().mean()
-    body_fat_avg = week_df["body_fat_percent"].dropna().mean()
-    waist_avg = week_df["waist_cm"].dropna().mean()
-    sleep_avg = week_df["sleep_hours"].dropna().mean()
-    workout_total = int(week_df["workout_minutes"].fillna(0).sum())
-    active_calories_total = int(week_df["active_calories"].fillna(0).sum())
-    avg_heart_rate = week_df["avg_heart_rate"].dropna().mean()
-    avg_rpe = week_df["rpe"].dropna().mean()
-    rehab_days = int(week_df["rehab_done"].fillna(0).sum())
-    food_counts = week_df["food_category"].dropna().value_counts()
-    main_food = food_counts.index[0] if not food_counts.empty else "未分類"
+    summary_lines = [f"- 本週記錄 {recorded_days} 天。"]
 
-    weight_gap = None
-    if pd.notna(latest.get("weight_kg")):
-        weight_gap = latest["weight_kg"] - targets["target_weight_kg"]
+    weights = week_df[["log_date", "weight_kg"]].copy() if "weight_kg" in week_df.columns else pd.DataFrame()
+    if not weights.empty:
+        weights["weight_kg"] = pd.to_numeric(weights["weight_kg"], errors="coerce")
+        weights = weights[weights["weight_kg"] > 0].dropna(subset=["weight_kg"]).sort_values("log_date")
+    body_fat = positive_numeric_series(week_df, "body_fat_percent")
+    if weights.empty and body_fat.empty:
+        summary_lines.append("- 本週身體指標資料不足。")
+    else:
+        latest_weight = compact_number(float(weights.iloc[-1]["weight_kg"])) if not weights.empty else "-"
+        avg_body_fat = compact_number(body_fat.mean()) if not body_fat.empty else "-"
+        summary_lines.append(f"- 最新體重 {latest_weight} kg，平均體脂 {avg_body_fat}%。")
 
-    highlights = [
-        f"本週記錄 {recorded_days} 天。",
-        f"平均體重 {compact_number(weight_avg)} kg，平均體脂 {compact_number(body_fat_avg)}%。",
-        f"平均腰圍 {compact_number(waist_avg)} cm，平均睡眠 {compact_number(sleep_avg)} 小時。",
-        f"運動總量 {workout_total} 分鐘，復健完成 {rehab_days} 天。",
-        f"Apple Watch 運動摘要：活動熱量 {active_calories_total} kcal，平均心率 {compact_number(avg_heart_rate, 0)} bpm，平均 RPE {compact_number(avg_rpe)}。",
-        f"飲食型態以「{main_food}」為主。",
-    ]
+    sleep_hours = positive_numeric_series(week_df, "sleep_hours")
+    sleep_quality = positive_numeric_series(week_df, "sleep_quality")
+    if sleep_hours.empty and sleep_quality.empty:
+        summary_lines.append("- 本週睡眠資料不足。")
+    else:
+        summary_lines.append(
+            f"- 平均睡眠 {compact_number(sleep_hours.mean())} 小時，"
+            f"平均睡眠品質 {compact_number(sleep_quality.mean(), 0)}%。"
+        )
 
-    recommendations = []
-    if weight_gap is not None:
-        if weight_gap > 2:
-            recommendations.append(
-                f"體重仍高於 {compact_number(targets['target_weight_kg'])}kg 目標，"
-                "先維持高蛋白、減少高油甜與應酬頻率。"
-            )
-        elif weight_gap < -1:
-            recommendations.append("體重已低於目標附近，建議確認精神、訓練表現與恢復狀態。")
+    bp_columns = ["systolic_bp", "diastolic_bp", "pulse_bpm"]
+    available_bp_columns = [column for column in bp_columns if column in week_df.columns]
+    if not available_bp_columns:
+        summary_lines.append("- 本週血壓 / 脈搏資料不足。")
+    else:
+        bp_df = week_df[["log_date", *available_bp_columns]].copy()
+        for column in available_bp_columns:
+            bp_df[column] = pd.to_numeric(bp_df[column], errors="coerce")
+            bp_df.loc[bp_df[column] <= 0, column] = pd.NA
+        bp_rows = bp_df[bp_df[available_bp_columns].notna().any(axis=1)]
+        if bp_rows.empty:
+            summary_lines.append("- 本週血壓 / 脈搏資料不足。")
         else:
-            recommendations.append(
-                f"體重接近 {compact_number(targets['target_weight_kg'])}kg 目標，"
-                "可把注意力轉到腰圍、睡眠和訓練穩定度。"
+            avg_systolic = compact_number(bp_df.get("systolic_bp", pd.Series(dtype="float64")).mean(), 0)
+            avg_diastolic = compact_number(bp_df.get("diastolic_bp", pd.Series(dtype="float64")).mean(), 0)
+            avg_pulse = compact_number(bp_df.get("pulse_bpm", pd.Series(dtype="float64")).mean(), 0)
+            summary_lines.append(
+                f"- 本週有 {len(bp_rows)} 天血壓 / 脈搏紀錄，"
+                f"平均約 {avg_systolic} / {avg_diastolic} mmHg，平均脈搏 {avg_pulse} bpm。"
             )
-    if pd.notna(body_fat_avg):
-        if body_fat_avg > targets["target_body_fat_max"]:
-            recommendations.append(
-                "體脂仍高於 "
-                f"{compact_number(targets['target_body_fat_min'])}-"
-                f"{compact_number(targets['target_body_fat_max'])}% 目標區間，"
-                "建議下週增加 1-2 次低強度活動。"
-            )
-        elif targets["target_body_fat_min"] <= body_fat_avg <= targets["target_body_fat_max"]:
-            recommendations.append("體脂落在目標區間，維持即可，避免過度節食。")
-    if pd.notna(sleep_avg) and sleep_avg < 7:
-        recommendations.append("睡眠平均低於 7 小時，恢復可能是下週最值得優先改善的指標。")
-    if workout_total < 120:
-        recommendations.append("運動量偏少，下週可先安排 2 次 45-60 分鐘訓練。")
-    if rehab_days < 3:
-        recommendations.append("復健頻率偏低，建議用短時間、低門檻方式累積到每週至少 3 天。")
 
-    if not recommendations:
-        recommendations.append("本週節奏穩定，下週延續同樣記錄密度並觀察腰圍與體脂變化。")
+    workout_minutes = positive_numeric_series(week_df, "workout_minutes")
+    if workout_minutes.empty:
+        summary_lines.append("- 本週運動資料不足。")
+    else:
+        workout_df = week_df.copy()
+        workout_df["workout_minutes"] = pd.to_numeric(workout_df["workout_minutes"], errors="coerce")
+        valid_workouts = workout_df[workout_df["workout_minutes"] > 0]
+        rpe = positive_numeric_series(valid_workouts, "rpe")
+        summary_lines.append(
+            f"- 本週運動 {len(valid_workouts)} 天，共 {int(workout_minutes.sum())} 分鐘，"
+            f"平均 RPE {compact_number(rpe.mean())}。"
+        )
+
+    rehab_count = int(
+        pd.to_numeric(
+            week_df.get("rehab_done", pd.Series(dtype="float64")),
+            errors="coerce",
+        ).fillna(0).sum()
+    )
+    summary_lines.append(f"- 本週復健 / 活動度訓練 {rehab_count} 次。")
+
+    discomfort_note = latest_note("discomfort_notes")
+    if discomfort_note:
+        summary_lines.append(f"- 疼痛 / 疲勞紀錄：有，最近一筆：{discomfort_note}")
+    else:
+        summary_lines.append("- 疼痛 / 疲勞紀錄：無。")
 
     return "\n".join(
         [
             f"週期：{window.start.isoformat()} 至 {window.end.isoformat()}",
             "",
-            "本週摘要：",
-            *[f"- {item}" for item in highlights],
+            "本週健康摘要：",
+            *summary_lines,
             "",
-            "下週建議：",
-            *[f"- {item}" for item in recommendations],
+            "下週留意：",
+            "- 繼續穩定記錄體重、睡眠、血壓與運動。",
+            "- 若睡眠不足或疲勞增加，運動強度可先保守。",
+            "- 若疼痛或不適持續，請以安全與專業建議為優先。",
+            "",
+            "本週總結僅作健康管理追蹤，不作醫療診斷。",
         ]
     )
 
@@ -1674,7 +1716,7 @@ def render_weekly_rehab_fatigue_summary(week_df: pd.DataFrame) -> None:
             use_container_width=True,
             hide_index=True,
         )
-    st.caption("復健與疲勞摘要只整理紀錄，不作醫療診斷或治療建議。")
+    st.caption("復健與疲勞摘要只整理紀錄，不作醫療診斷或專業處置建議。")
 
 
 def save_weekly_report(person_name: str, window: WeekWindow, summary: str) -> None:
