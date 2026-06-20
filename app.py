@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-1225-R18"
+APP_VERSION = "Ver. PGY90-G1-260620-1235-R19"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -2062,6 +2062,129 @@ def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
     )
 
 
+def render_today_status_overview(person_name: str, df: pd.DataFrame, height_cm: float) -> None:
+    def latest_positive(column: str) -> float | None:
+        if df.empty or column not in df.columns:
+            return None
+        values = df.copy()
+        values[column] = pd.to_numeric(values[column], errors="coerce")
+        values = values[values[column] > 0].dropna(subset=[column]).sort_values("log_date")
+        if values.empty:
+            return None
+        return float(values.iloc[-1][column])
+
+    def positive_or_none(value) -> float | None:
+        if value is None or pd.isna(value):
+            return None
+        numeric = float(value)
+        return numeric if numeric > 0 else None
+
+    def latest_int(value) -> int | None:
+        numeric = positive_or_none(value)
+        return int(numeric) if numeric is not None else None
+
+    local_today = get_local_today()
+    today_log = get_daily_log(person_name, local_today)
+    yesterday_log = get_daily_log(person_name, local_today - timedelta(days=1))
+    profile = get_coach_profile(person_name)
+
+    weight = latest_positive("weight_kg")
+    body_fat = latest_positive("body_fat_percent")
+    waist = latest_positive("waist_cm")
+    bmi = weight / ((height_cm / 100) ** 2) if weight is not None and height_cm > 0 else None
+
+    sleep_hours = positive_or_none(today_log["sleep_hours"]) if today_log else None
+    sleep_quality = latest_int(today_log["sleep_quality"]) if today_log else None
+    if sleep_hours is None and sleep_quality is None:
+        sleep_value = "尚未記錄"
+    else:
+        sleep_parts = []
+        if sleep_hours is not None:
+            hours, minutes = split_sleep_time(sleep_hours)
+            sleep_parts.append(f"{hours} 小時 {minutes} 分")
+        if sleep_quality is not None:
+            sleep_parts.append(f"品質 {sleep_quality}%")
+        sleep_value = "，".join(sleep_parts)
+
+    systolic_bp = latest_int(today_log["systolic_bp"]) if today_log else None
+    diastolic_bp = latest_int(today_log["diastolic_bp"]) if today_log else None
+    pulse_bpm = latest_int(today_log["pulse_bpm"]) if today_log else None
+    if systolic_bp is None and diastolic_bp is None and pulse_bpm is None:
+        bp_value = "尚未記錄"
+    else:
+        bp_text = (
+            f"{compact_number(systolic_bp, 0)} / {compact_number(diastolic_bp, 0)} mmHg"
+            if systolic_bp is not None or diastolic_bp is not None
+            else "血壓未記錄"
+        )
+        pulse_text = f"，脈搏 {pulse_bpm} bpm" if pulse_bpm is not None else ""
+        bp_value = f"{bp_text}{pulse_text}"
+
+    training_advice = build_training_intensity_advice(
+        sleep_hours=sleep_hours,
+        sleep_quality=sleep_quality,
+        systolic_bp=systolic_bp,
+        diastolic_bp=diastolic_bp,
+        pulse_bpm=pulse_bpm,
+        discomfort_notes=str(today_log["discomfort_notes"] or "") if today_log else "",
+        workout_minutes=int(positive_or_none(today_log["workout_minutes"]) or 0) if today_log else 0,
+        rpe=int(positive_or_none(today_log["rpe"]) or 0) if today_log else 0,
+        health_limitations=(profile["health_limitations"] if profile else "") or "",
+        yesterday_workout_minutes=int(positive_or_none(yesterday_log["workout_minutes"]) or 0) if yesterday_log else 0,
+        yesterday_rpe=int(positive_or_none(yesterday_log["rpe"]) or 0) if yesterday_log else 0,
+    )
+
+    meals = load_meals(person_name)
+    totals = daily_meal_totals(meals, local_today)
+    if profile:
+        calorie_target = int(profile["daily_calorie_target"] or 0)
+        protein_target = int(profile["protein_target_g"] or 0)
+    else:
+        calorie_target, protein_target, _ = default_targets(weight or 75.0, "減脂", "一般活動")
+    if calorie_target <= 0:
+        calorie_target, protein_target, _ = default_targets(weight or 75.0, "減脂", "一般活動")
+
+    if totals["calories"] <= 0:
+        calorie_value = "尚未記錄"
+    else:
+        calorie_value = f"{int(totals['calories'])} / {calorie_target} kcal"
+    protein_value = ""
+    if totals["protein_g"] > 0 and protein_target > 0:
+        protein_value = f"蛋白質 {compact_number(totals['protein_g'], 0)} / {protein_target} g"
+
+    st.markdown("### 今日狀態總覽")
+    st.caption(f"日期：{local_today.strftime('%Y/%m/%d')}（Asia/Kuala_Lumpur）")
+    row_one = st.columns(4)
+    row_one[0].metric("體重", f"{compact_number(weight)} kg")
+    row_one[1].metric("體脂", f"{compact_number(body_fat)} %")
+    row_one[2].metric("腰圍", f"{compact_number(waist)} cm")
+    row_one[3].metric("BMI", compact_number(bmi))
+
+    status_columns = st.columns(2)
+    with status_columns[0]:
+        st.markdown(
+            "\n".join(
+                [
+                    f"- **今日睡眠：** {sleep_value}",
+                    f"- **血壓 / 脈搏：** {bp_value}",
+                ]
+            )
+        )
+    with status_columns[1]:
+        nutrition_lines = [f"- **今日熱量：** {calorie_value}"]
+        if protein_value:
+            nutrition_lines.append(f"- **{protein_value}**")
+        st.markdown(
+            "\n".join(
+                [
+                    f"- **訓練建議：** {training_advice['level']}",
+                    *nutrition_lines,
+                ]
+            )
+        )
+    st.caption(str(training_advice["reason"]))
+
+
 # UI pages
 
 def daily_input_page(person_name: str) -> None:
@@ -3322,6 +3445,7 @@ def app() -> None:
     height_cm = get_person_height_cm(selected_person)
     targets = get_person_targets(selected_person)
     df = load_logs(selected_person)
+    render_today_status_overview(selected_person, df, height_cm)
     metric_cards(df, height_cm)
 
     st.markdown(
