@@ -6,8 +6,10 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import sqlite3
 import secrets
+import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -57,7 +59,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-1235-R19"
+APP_VERSION = "Ver. PGY90-G1-260620-1247-R20"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -69,6 +71,42 @@ REGISTRATION_SUCCESS_KEY = "registration_success_message"
 
 def get_local_today() -> date:
     return datetime.now(APP_TIMEZONE).date()
+
+
+def next_revision_label(current_revision: str) -> str:
+    match = re.fullmatch(r"R(\d+)", current_revision.strip())
+    if not match:
+        return current_revision
+    next_number = int(match.group(1)) + 1
+    return f"R{next_number:02d}"
+
+
+def is_git_worktree_dirty() -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    return bool(result.stdout.strip())
+
+
+def get_display_app_version() -> str:
+    if not is_git_worktree_dirty():
+        return APP_VERSION
+
+    match = re.fullmatch(r"Ver\. PGY90-G1-\d{6}-\d{4}-(R\d+)", APP_VERSION)
+    if not match:
+        return APP_VERSION
+    timestamp = datetime.now(APP_TIMEZONE).strftime("%y%m%d-%H%M")
+    return f"Ver. PGY90-G1-{timestamp}-{next_revision_label(match.group(1))}-Beta"
 
 
 def prepare_local_date_input_state(date_key: str) -> date:
@@ -3438,7 +3476,7 @@ def app() -> None:
     st.title(f"{selected_person} 的健康管理")
     st.caption(f"目前查看：{selected_person}")
     st.markdown(
-        f"<div style='text-align: right; color: #8a8f98; font-size: 0.85rem;'>{APP_VERSION}</div>",
+        f"<div style='text-align: right; color: #8a8f98; font-size: 0.85rem;'>{get_display_app_version()}</div>",
         unsafe_allow_html=True,
     )
 
