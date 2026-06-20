@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-1216-R17"
+APP_VERSION = "Ver. PGY90-G1-260620-1225-R18"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -2566,13 +2566,15 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
         height=320,
     )
 
-    if not week_df.empty:
-        st.markdown("#### 本週資料")
-        st.dataframe(
-            week_df.sort_values("log_date", ascending=False),
-            use_container_width=True,
-            hide_index=True,
-        )
+    with st.expander("查看本週原始資料", expanded=False):
+        if week_df.empty:
+            st.info("本週尚無原始資料。")
+        else:
+            st.dataframe(
+                week_df.sort_values("log_date", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def coach_page(df: pd.DataFrame, person_name: str) -> None:
