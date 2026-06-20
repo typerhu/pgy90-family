@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-0947-R15"
+APP_VERSION = "Ver. PGY90-G1-260620-1205-R16"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1412,7 +1412,7 @@ def build_training_intensity_advice(
     health_limitations: str,
     yesterday_workout_minutes: int = 0,
     yesterday_rpe: int = 0,
-) -> dict[str, str]:
+) -> dict[str, object]:
     def has_any(text: str, keywords: list[str]) -> bool:
         normalized = (text or "").lower()
         return any(keyword.lower() in normalized for keyword in keywords)
@@ -1437,7 +1437,40 @@ def build_training_intensity_advice(
     impact_limit_keywords = ["acl", "膝蓋", "膝", "術後", "腰痛", "血壓", "心臟", "頭暈"]
 
     reasons: list[str] = []
+    evidence: list[str] = []
     level = "正常訓練"
+
+    if valid_sleep_hours is not None or valid_sleep_quality is not None:
+        sleep_parts = []
+        if valid_sleep_hours is not None:
+            sleep_parts.append(f"{compact_number(valid_sleep_hours)} 小時")
+        if valid_sleep_quality is not None:
+            sleep_parts.append(f"品質 {compact_number(valid_sleep_quality, 0)}%")
+        evidence.append(f"睡眠：{'，'.join(sleep_parts)}")
+    if has_bp_record:
+        bp_text = "-"
+        if valid_systolic is not None or valid_diastolic is not None:
+            bp_text = f"{compact_number(valid_systolic, 0)} / {compact_number(valid_diastolic, 0)} mmHg"
+        pulse_text = f"，{compact_number(valid_pulse, 0)} bpm" if valid_pulse is not None else ""
+        evidence.append(f"血壓 / 脈搏：{bp_text}{pulse_text}")
+    if notes:
+        evidence.append(f"疼痛 / 疲勞：{notes[:80]}{'...' if len(notes) > 80 else ''}")
+    if has_workout or valid_rpe is not None:
+        load_parts = []
+        if has_workout:
+            load_parts.append(f"今日 {workout_minutes} 分鐘")
+        if valid_rpe is not None:
+            load_parts.append(f"RPE {valid_rpe}")
+        evidence.append(f"運動負荷：{'，'.join(load_parts)}")
+    if yesterday_workout_minutes > 0 or yesterday_rpe > 0:
+        yesterday_parts = []
+        if yesterday_workout_minutes > 0:
+            yesterday_parts.append(f"昨日 {yesterday_workout_minutes} 分鐘")
+        if yesterday_rpe > 0:
+            yesterday_parts.append(f"RPE {yesterday_rpe}")
+        evidence.append(f"昨日運動：{'，'.join(yesterday_parts)}")
+    if limitations:
+        evidence.append(f"健康限制 / 身體狀況：{limitations[:80]}{'...' if len(limitations) > 80 else ''}")
 
     if valid_sleep_hours is not None and valid_sleep_hours < 4:
         level = "休息"
@@ -1508,6 +1541,9 @@ def build_training_intensity_advice(
             "level": "低強度訓練",
             "reason": "今日恢復資料不足，先用保守強度。",
             "direction": "步行 Walking、伸展 Mobility，或輕量活動。",
+            "evidence": ["今日睡眠、疲勞、血壓與運動資料不足，因此採保守建議。"],
+            "direction_items": ["步行 Walking", "伸展 Mobility", "輕量活動 Light Activity"],
+            "avoid_items": ["一開始就做高強度訓練", "未熱身直接衝刺或大重量訓練"],
             "safety": "若身體不適，請降低強度或休息。",
         }
 
@@ -1516,18 +1552,45 @@ def build_training_intensity_advice(
 
     if level == "休息":
         direction = "今天以休息 Rest 為主，可做非常輕量伸展 Mobility 或呼吸放鬆，不安排正式訓練。"
+        direction_items = ["休息 Rest", "輕量伸展 Mobility", "呼吸放鬆 Breathing"]
     elif level == "恢復 / 活動度":
         direction = "今天建議以伸展 Mobility、復健 Rehab、步行 Walking 為主，避免跳躍、衝刺、高衝擊訓練。"
+        direction_items = ["伸展 Mobility", "復健 Rehab", "步行 Walking", "呼吸放鬆 Breathing"]
     elif level == "低強度訓練":
         direction = "今天可選低強度有氧 Cardio、步行 Walking、輕量重訓 Strength Training，RPE 建議控制在 3-5。"
+        direction_items = ["步行 Walking", "低強度有氧 Cardio", "輕量重訓 Strength Training", "伸展 Mobility"]
     else:
         direction = "今天可安排正常訓練，但仍建議先熱身，並依膝蓋、腰肩與整體狀態調整強度。"
+        direction_items = ["重訓 Strength Training", "有氧 Cardio", "飛輪 Spinning", "乒乓 Table Tennis"]
 
-    safety = "若疼痛、不適或血壓異常持續，請以安全與專業建議為優先。"
+    avoid_items: list[str] = []
+    if level == "正常訓練":
+        avoid_items.extend(["未熱身直接進入高強度", "忽略疼痛或不適硬撐"])
+    elif level == "低強度訓練":
+        avoid_items.extend(["高 RPE 訓練", "一開始就做高強度間歇"])
+    elif level == "恢復 / 活動度":
+        avoid_items.extend(["高 RPE 訓練", "長時間高強度有氧", "硬撐完成訓練"])
+    else:
+        avoid_items.extend(["正式高強度訓練", "未恢復前硬撐完成訓練"])
+
+    if has_any(combined_text, ["acl", "膝蓋", "膝", "術後", "痛", "疼"]):
+        avoid_items.extend(["高衝擊 HIIT", "跳躍 Jumping", "衝刺 Sprint", "急停急轉", "大重量深蹲 Heavy Squat"])
+    if has_any(notes, fatigue_keywords) or (valid_sleep_hours is not None and valid_sleep_hours < 6.5):
+        avoid_items.extend(["高 RPE 訓練", "長時間高強度有氧", "硬撐完成訓練"])
+    if (valid_systolic is not None and valid_systolic >= 160) or (valid_diastolic is not None and valid_diastolic >= 100):
+        avoid_items.extend(["突然高強度衝刺", "憋氣用力", "高強度間歇 HIIT"])
+
+    avoid_items = list(dict.fromkeys(avoid_items))
+    direction_items = list(dict.fromkeys(direction_items))
+
+    safety = "此建議僅作健康管理參考，不作醫療診斷。若疼痛、不適、頭暈、胸悶或血壓異常持續，請以安全與專業建議為優先。"
     return {
         "level": level,
         "reason": "，且".join(dict.fromkeys(reasons)) + "。",
         "direction": direction,
+        "evidence": evidence,
+        "direction_items": direction_items,
+        "avoid_items": avoid_items,
         "safety": safety,
     }
 
@@ -2190,19 +2253,31 @@ def daily_input_page(person_name: str) -> None:
 
         st.markdown("---")
         st.markdown("#### 今日訓練強度建議")
-        advice_body = (
-            f"**建議強度：{training_advice['level']}**\n\n"
-            f"**理由：** {training_advice['reason']}\n\n"
-            f"**建議方向：** {training_advice['direction']}\n\n"
-            f"**安全提醒：** {training_advice['safety']}"
+        evidence_items = training_advice.get("evidence", [])
+        direction_items = training_advice.get("direction_items", [])
+        avoid_items = training_advice.get("avoid_items", [])
+        evidence_text = "\n".join(f"- {item}" for item in evidence_items)
+        direction_text = "\n".join(f"- {item}" for item in direction_items)
+        avoid_text = "\n".join(f"- {item}" for item in avoid_items)
+        advice_body = "\n\n".join(
+            [
+                f"### 今日建議：{training_advice['level']}",
+                "**判斷依據：**\n" + evidence_text,
+                "**簡短理由：**\n" + str(training_advice["reason"]),
+                "**建議方向：**\n" + direction_text,
+                "**今日避免：**\n" + avoid_text,
+                "**安全提醒：**\n" + str(training_advice["safety"]),
+            ]
         )
         if training_advice["level"] == "正常訓練":
             st.success(advice_body)
         elif training_advice["level"] == "低強度訓練":
             st.info(advice_body)
+        elif training_advice["level"] == "休息":
+            st.error(advice_body)
         else:
             st.warning(advice_body)
-        st.caption("此建議只作每日健康管理參考，不是訓練菜單，也不作醫療診斷。")
+        st.caption("這不是完整訓練菜單，不安排重量、組數或具體動作。")
 
         st.markdown("---")
         st.markdown("#### 備註")
