@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-1205-R16"
+APP_VERSION = "Ver. PGY90-G1-260620-1216-R17"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1873,6 +1873,90 @@ def render_weekly_workout_summary(week_df: pd.DataFrame) -> None:
     )
 
 
+def weekly_training_status_message(counts: dict[str, int], total_days: int) -> str:
+    if total_days < 2:
+        return "本週訓練強度資料仍不足，建議先穩定記錄睡眠、疲勞、血壓與運動。"
+
+    priority = ["休息", "恢復 / 活動度", "低強度訓練", "正常訓練"]
+    main_level = max(priority, key=lambda level: (counts.get(level, 0), -priority.index(level)))
+    if main_level == "休息":
+        return "本週休息建議較多，可能與睡眠、疲勞或疼痛紀錄有關，建議下週先觀察恢復狀態。"
+    if main_level == "恢復 / 活動度":
+        return "本週恢復 / 活動度建議較多，建議繼續留意睡眠、疲勞與膝蓋狀態。"
+    if main_level == "低強度訓練":
+        return "本週多數天數適合低強度訓練，可先維持穩定活動量，再視恢復狀態調整。"
+    return "本週多數天數可正常訓練，但仍建議依睡眠、疲勞與膝蓋狀態調整強度。"
+
+
+def render_weekly_training_intensity_review(
+    all_logs_df: pd.DataFrame,
+    week_df: pd.DataFrame,
+    health_limitations: str,
+) -> None:
+    def safe_number(value, fallback=0):
+        if value is None or pd.isna(value):
+            return fallback
+        return value
+
+    st.markdown("### 本週訓練強度回顧")
+    levels = ["正常訓練", "低強度訓練", "恢復 / 活動度", "休息"]
+    if week_df.empty:
+        st.info("本週訓練強度資料不足。可先在「每日輸入」記錄睡眠、血壓、疲勞與運動資料。")
+        return
+
+    logs_by_date = {}
+    if not all_logs_df.empty:
+        for _, row in all_logs_df.iterrows():
+            log_date = row["log_date"].date() if hasattr(row["log_date"], "date") else row["log_date"]
+            logs_by_date[log_date] = row
+
+    detail_rows = []
+    for _, row in week_df.sort_values("log_date").iterrows():
+        log_date = row["log_date"].date() if hasattr(row["log_date"], "date") else row["log_date"]
+        yesterday = logs_by_date.get(log_date - timedelta(days=1))
+        advice = build_training_intensity_advice(
+            sleep_hours=safe_number(row.get("sleep_hours"), None),
+            sleep_quality=int(safe_number(row.get("sleep_quality"), 0)),
+            systolic_bp=int(safe_number(row.get("systolic_bp"), 0)),
+            diastolic_bp=int(safe_number(row.get("diastolic_bp"), 0)),
+            pulse_bpm=int(safe_number(row.get("pulse_bpm"), 0)),
+            discomfort_notes=str(row.get("discomfort_notes") or ""),
+            workout_minutes=int(safe_number(row.get("workout_minutes"), 0)),
+            rpe=int(safe_number(row.get("rpe"), 0)),
+            health_limitations=health_limitations or "",
+            yesterday_workout_minutes=int(safe_number(yesterday["workout_minutes"], 0)) if yesterday is not None else 0,
+            yesterday_rpe=int(safe_number(yesterday["rpe"], 0)) if yesterday is not None else 0,
+        )
+        reason = str(advice.get("reason") or "").strip()
+        detail_rows.append(
+            {
+                "日期": log_date.isoformat(),
+                "建議強度": str(advice["level"]),
+                "主要理由": reason,
+            }
+        )
+
+    if not detail_rows:
+        st.info("本週訓練強度資料不足。可先在「每日輸入」記錄睡眠、血壓、疲勞與運動資料。")
+        return
+
+    counts = {level: 0 for level in levels}
+    for row in detail_rows:
+        counts[row["建議強度"]] = counts.get(row["建議強度"], 0) + 1
+
+    columns = st.columns(4)
+    for column, level in zip(columns, levels):
+        column.metric(level, f"{counts.get(level, 0)} 天")
+
+    st.info(f"本週主要狀態：{weekly_training_status_message(counts, len(detail_rows))}")
+    st.dataframe(
+        pd.DataFrame(detail_rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption("訓練強度回顧沿用每日訓練強度建議規則，只作健康管理參考，不作醫療診斷或完整訓練菜單。")
+
+
 def render_weekly_rehab_fatigue_summary(week_df: pd.DataFrame) -> None:
     st.markdown("### 本週復健與疲勞摘要")
     if week_df.empty:
@@ -2446,6 +2530,8 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
     window = week_window(selected)
     st.caption(f"週期：{window.start.isoformat()} 至 {window.end.isoformat()}")
     targets = get_person_targets(person_name)
+    profile = get_coach_profile(person_name)
+    health_limitations = profile["health_limitations"] if profile else ""
 
     if df.empty:
         week_df = df
@@ -2471,6 +2557,7 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
     render_weekly_sleep_summary(week_df)
     render_weekly_bp_summary(week_df)
     render_weekly_workout_summary(week_df)
+    render_weekly_training_intensity_review(df, week_df, health_limitations or "")
     render_weekly_rehab_fatigue_summary(week_df)
 
     st.text_area(
