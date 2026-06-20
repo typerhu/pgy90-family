@@ -57,7 +57,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260620-0932-R14"
+APP_VERSION = "Ver. PGY90-G1-260620-0947-R15"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1400,6 +1400,138 @@ def split_sleep_time(total_hours: float | None) -> tuple[int, int]:
     return total_minutes // 60, total_minutes % 60
 
 
+def build_training_intensity_advice(
+    sleep_hours: float | None,
+    sleep_quality: int | None,
+    systolic_bp: int | None,
+    diastolic_bp: int | None,
+    pulse_bpm: int | None,
+    discomfort_notes: str,
+    workout_minutes: int,
+    rpe: int,
+    health_limitations: str,
+    yesterday_workout_minutes: int = 0,
+    yesterday_rpe: int = 0,
+) -> dict[str, str]:
+    def has_any(text: str, keywords: list[str]) -> bool:
+        normalized = (text or "").lower()
+        return any(keyword.lower() in normalized for keyword in keywords)
+
+    notes = discomfort_notes.strip()
+    limitations = health_limitations.strip()
+    combined_text = f"{notes} {limitations}"
+    valid_sleep_hours = sleep_hours if sleep_hours is not None and sleep_hours > 0 else None
+    valid_sleep_quality = sleep_quality if sleep_quality is not None and sleep_quality > 0 else None
+    valid_systolic = systolic_bp if systolic_bp is not None and systolic_bp > 0 else None
+    valid_diastolic = diastolic_bp if diastolic_bp is not None and diastolic_bp > 0 else None
+    valid_pulse = pulse_bpm if pulse_bpm is not None and pulse_bpm > 0 else None
+    valid_rpe = rpe if rpe > 0 else None
+    has_bp_record = any(value is not None for value in [valid_systolic, valid_diastolic, valid_pulse])
+    has_workout = workout_minutes > 0
+    had_recent_workout = has_workout or yesterday_workout_minutes > 0
+
+    severe_keywords = ["痛", "疼", "不適", "拉傷", "扭傷", "頭暈", "胸悶", "很累", "極累"]
+    fatigue_keywords = ["累", "疲勞", "精神差", "沒睡好"]
+    joint_keywords = ["膝", "膝蓋", "腰", "肩", "acl", "術後"]
+    rest_limit_keywords = ["避免運動", "停止運動", "醫生交代休息", "醫師交代休息", "需要休息"]
+    impact_limit_keywords = ["acl", "膝蓋", "膝", "術後", "腰痛", "血壓", "心臟", "頭暈"]
+
+    reasons: list[str] = []
+    level = "正常訓練"
+
+    if valid_sleep_hours is not None and valid_sleep_hours < 4:
+        level = "休息"
+        reasons.append("睡眠少於 4 小時")
+    if has_any(notes, severe_keywords):
+        level = "休息"
+        reasons.append("疼痛 / 不適 / 疲勞紀錄有明顯不適")
+    if valid_rpe is not None and valid_rpe >= 8 and had_recent_workout:
+        level = "休息"
+        reasons.append("近期已有高 RPE 運動紀錄")
+    if has_any(limitations, rest_limit_keywords):
+        level = "休息"
+        reasons.append("健康限制中有休息或避免運動相關提醒")
+
+    if level != "休息":
+        if valid_systolic is not None and valid_systolic >= 160:
+            level = "恢復 / 活動度"
+            reasons.append("今日收縮壓紀錄偏高，建議避免高強度訓練")
+        if valid_diastolic is not None and valid_diastolic >= 100:
+            level = "恢復 / 活動度"
+            reasons.append("今日舒張壓紀錄偏高，建議避免高強度訓練")
+        if valid_sleep_hours is not None and 4 <= valid_sleep_hours < 5.5:
+            level = "恢復 / 活動度"
+            reasons.append("睡眠時間偏短")
+        if valid_sleep_quality is not None and valid_sleep_quality < 50:
+            level = "恢復 / 活動度"
+            reasons.append("睡眠品質偏低")
+        if has_any(notes, fatigue_keywords):
+            level = "恢復 / 活動度"
+            reasons.append("疲勞紀錄顯示恢復狀態較弱")
+        if has_any(combined_text, impact_limit_keywords):
+            level = "恢復 / 活動度"
+            reasons.append("健康限制或紀錄提到膝蓋、術後、腰肩或心血管相關注意事項")
+        if valid_rpe is not None and valid_rpe >= 7 and has_workout:
+            level = "恢復 / 活動度"
+            reasons.append("今天已經做過較高 RPE 運動")
+
+    if level == "正常訓練":
+        if valid_sleep_hours is not None and 5.5 <= valid_sleep_hours < 6.5:
+            level = "低強度訓練"
+            reasons.append("睡眠時間略不足")
+        if valid_sleep_quality is not None and 50 <= valid_sleep_quality < 65:
+            level = "低強度訓練"
+            reasons.append("睡眠品質普通")
+        if notes and has_any(notes, ["輕微", "普通", "有點累", "微酸"]):
+            level = "低強度訓練"
+            reasons.append("有輕微疲勞或不適紀錄")
+        if has_workout and (valid_rpe is None or valid_rpe < 7):
+            level = "低強度訓練"
+            reasons.append("今日已有運動紀錄，強度先保守")
+        if has_bp_record:
+            level = "低強度訓練"
+            reasons.append("今日有血壓 / 脈搏紀錄，訓練前先留意身體感覺")
+
+    has_recovery_data = any(
+        [
+            valid_sleep_hours is not None,
+            valid_sleep_quality is not None,
+            has_bp_record,
+            bool(notes),
+            has_workout,
+            valid_rpe is not None,
+            bool(limitations),
+        ]
+    )
+    if not has_recovery_data:
+        return {
+            "level": "低強度訓練",
+            "reason": "今日恢復資料不足，先用保守強度。",
+            "direction": "步行 Walking、伸展 Mobility，或輕量活動。",
+            "safety": "若身體不適，請降低強度或休息。",
+        }
+
+    if level == "正常訓練" and not reasons:
+        reasons.append("睡眠與恢復紀錄穩定，沒有明顯疼痛 / 不適 / 疲勞紀錄")
+
+    if level == "休息":
+        direction = "今天以休息 Rest 為主，可做非常輕量伸展 Mobility 或呼吸放鬆，不安排正式訓練。"
+    elif level == "恢復 / 活動度":
+        direction = "今天建議以伸展 Mobility、復健 Rehab、步行 Walking 為主，避免跳躍、衝刺、高衝擊訓練。"
+    elif level == "低強度訓練":
+        direction = "今天可選低強度有氧 Cardio、步行 Walking、輕量重訓 Strength Training，RPE 建議控制在 3-5。"
+    else:
+        direction = "今天可安排正常訓練，但仍建議先熱身，並依膝蓋、腰肩與整體狀態調整強度。"
+
+    safety = "若疼痛、不適或血壓異常持續，請以安全與專業建議為優先。"
+    return {
+        "level": level,
+        "reason": "，且".join(dict.fromkeys(reasons)) + "。",
+        "direction": direction,
+        "safety": safety,
+    }
+
+
 # UI helpers
 
 def apply_ui_style() -> None:
@@ -1793,6 +1925,9 @@ def daily_input_page(person_name: str) -> None:
     selected_date = st.date_input("日期", key=daily_date_key)
     st.caption(f"本地日期：{local_today.strftime('%Y/%m/%d')}（Asia/Kuala_Lumpur）")
     existing = get_daily_log(person_name, selected_date)
+    coach_profile = get_coach_profile(person_name)
+    health_limitations = coach_profile["health_limitations"] if coach_profile else ""
+    yesterday_log = get_daily_log(person_name, selected_date - timedelta(days=1))
 
     def existing_value(key: str, fallback):
         if existing is None or existing[key] is None:
@@ -2035,6 +2170,40 @@ def daily_input_page(person_name: str) -> None:
             else 0,
         )
         rehab_notes = st.text_area("復健記錄", value=existing_value("rehab_notes", ""), height=70)
+
+        advice_sleep_hours = sleep_hour_part + (sleep_minute_part / 60) if sleep_recorded else None
+        yesterday_workout_minutes = int(yesterday_log["workout_minutes"] or 0) if yesterday_log else 0
+        yesterday_rpe = int(yesterday_log["rpe"] or 0) if yesterday_log else 0
+        training_advice = build_training_intensity_advice(
+            sleep_hours=advice_sleep_hours,
+            sleep_quality=sleep_quality if sleep_recorded else None,
+            systolic_bp=systolic_bp,
+            diastolic_bp=diastolic_bp,
+            pulse_bpm=pulse_bpm,
+            discomfort_notes=discomfort_notes,
+            workout_minutes=workout_minutes,
+            rpe=rpe,
+            health_limitations=health_limitations or "",
+            yesterday_workout_minutes=yesterday_workout_minutes,
+            yesterday_rpe=yesterday_rpe,
+        )
+
+        st.markdown("---")
+        st.markdown("#### 今日訓練強度建議")
+        advice_body = (
+            f"**建議強度：{training_advice['level']}**\n\n"
+            f"**理由：** {training_advice['reason']}\n\n"
+            f"**建議方向：** {training_advice['direction']}\n\n"
+            f"**安全提醒：** {training_advice['safety']}"
+        )
+        if training_advice["level"] == "正常訓練":
+            st.success(advice_body)
+        elif training_advice["level"] == "低強度訓練":
+            st.info(advice_body)
+        else:
+            st.warning(advice_body)
+        st.caption("此建議只作每日健康管理參考，不是訓練菜單，也不作醫療診斷。")
+
         st.markdown("---")
         st.markdown("#### 備註")
         notes = st.text_area(
