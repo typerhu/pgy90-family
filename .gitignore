@@ -181,10 +181,13 @@ cython_debug/
 .cursorindexingignore
 
 # Local SQLite health data
+data/
 data/health.db
 *.db
 *.sqlite
 *.sqlite3
+backups/
+exports/
 
 # macOS local metadata
 .DS_Store
