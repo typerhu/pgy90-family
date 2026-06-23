@@ -59,7 +59,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260623-1226-R29"
+APP_VERSION = "Ver. PGY90-G1-260623-1238-R30"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
