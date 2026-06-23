@@ -19,6 +19,7 @@ import extra_streamlit_components as stx
 import streamlit as st
 
 import ai as meal_ai
+from db_adapter import CORE_TABLES, get_db_adapter, get_db_backend_name
 from db import DB_PATH, DATA_DIR, connect, table_columns
 from meals import (
     coach_feedback,
@@ -59,7 +60,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260623-1238-R30"
+APP_VERSION = "Ver. PGY90-G1-260623-1248-R31"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -3471,6 +3472,27 @@ def person_selector() -> str:
     return selected
 
 
+def render_db_adapter_status_check() -> None:
+    st.markdown("#### 資料庫狀態檢查")
+    backend = get_db_backend_name()
+    st.caption(f"DB backend: `{backend}`")
+
+    try:
+        adapter = get_db_adapter(backend)
+        counts = adapter.table_counts()
+    except Exception as exc:
+        st.error(f"資料庫 adapter 讀取失敗：{exc}")
+        st.caption("此區塊只供管理員檢查，不會影響正式 app 資料來源。")
+        return
+
+    rows = [
+        {"table": table_name, "row_count": counts.get(table_name, 0)}
+        for table_name in CORE_TABLES
+    ]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption("此區塊只透過 DB adapter 讀取 row count，不會寫入 SQLite 或 Supabase。")
+
+
 def admin_panel() -> str | None:
     st.sidebar.markdown("### 管理")
     mode = st.sidebar.radio(
@@ -3491,6 +3513,8 @@ def admin_panel() -> str | None:
             st.info("目前還沒有使用者資料。")
         else:
             st.dataframe(overview, use_container_width=True, hide_index=True)
+
+        render_db_adapter_status_check()
 
         st.markdown("#### 重設密碼")
         with st.form("admin_reset_password_form"):
