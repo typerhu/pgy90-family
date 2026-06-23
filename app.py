@@ -20,6 +20,7 @@ import streamlit as st
 
 import ai as meal_ai
 from db_adapter import CORE_TABLES, get_db_adapter, get_db_backend_name
+from db_sync_status import get_sqlite_supabase_sync_status
 from db import DB_PATH, DATA_DIR, connect, table_columns
 from meals import (
     coach_feedback,
@@ -60,7 +61,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260623-1248-R31"
+APP_VERSION = "Ver. PGY90-G1-260623-1303-R32"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -3493,6 +3494,35 @@ def render_db_adapter_status_check() -> None:
     st.caption("此區塊只透過 DB adapter 讀取 row count，不會寫入 SQLite 或 Supabase。")
 
 
+def render_db_sync_status_check() -> None:
+    st.markdown("#### 資料庫同步狀態")
+    try:
+        status = get_sqlite_supabase_sync_status()
+    except Exception as exc:
+        st.error(f"資料庫同步狀態讀取失敗：{exc}")
+        st.caption("此區塊只供管理員檢查，不會影響正式 app 資料來源。")
+        return
+
+    overall_status = status.get("overall_status", "ERROR")
+    if overall_status == "PASS":
+        st.success("整體狀態：PASS")
+    elif overall_status == "DIFF_FOUND":
+        st.warning("整體狀態：DIFF_FOUND")
+    else:
+        st.warning("整體狀態：ERROR")
+
+    rows = status.get("rows", [])
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    for message in status.get("errors", []):
+        st.warning(str(message))
+    for message in status.get("warnings", []):
+        st.caption(f"提醒：{message}")
+
+    st.caption("此區塊只讀取 SQLite / Supabase row count 與 key 差異，不會寫入任何資料。")
+
+
 def admin_panel() -> str | None:
     st.sidebar.markdown("### 管理")
     mode = st.sidebar.radio(
@@ -3515,6 +3545,7 @@ def admin_panel() -> str | None:
             st.dataframe(overview, use_container_width=True, hide_index=True)
 
         render_db_adapter_status_check()
+        render_db_sync_status_check()
 
         st.markdown("#### 重設密碼")
         with st.form("admin_reset_password_form"):
