@@ -47,3 +47,24 @@ The first real write pilot should still be `weekly_reports` save because:
 
 Do not move `meal_logs` CRUD, user auth, admin reset, or admin delete before
 dedicated write-path design and tests.
+
+## R41 Isolated Supabase Weekly Report Write Test
+
+R41 adds `scripts/test_supabase_weekly_report_write.py` as a standalone script.
+It is not imported by the Streamlit app and does not change formal app writes.
+
+The script validates a `weekly_reports` payload in dry-run mode by default:
+
+```bash
+python3 scripts/test_supabase_weekly_report_write.py --dry-run
+```
+
+The only mode that can write to Supabase is explicit execute mode:
+
+```bash
+python3 scripts/test_supabase_weekly_report_write.py --execute
+```
+
+Execute mode uses the test-only key `__R41_TEST__ | 2099-01-01`, then attempts
+insert, read back, update, cleanup, and cleanup verification. It must not write
+real `person_name` report data, and it must not touch SQLite.
