@@ -19,7 +19,7 @@ import extra_streamlit_components as stx
 import streamlit as st
 
 import ai as meal_ai
-from dashboard_read_models import get_person_daily_logs, get_person_weekly_reports
+from dashboard_read_models import get_person_daily_logs, get_person_meal_logs, get_person_weekly_reports
 from db_adapter import CORE_TABLES, get_db_adapter, get_db_backend_name
 from db_sync_status import get_sqlite_supabase_sync_status
 from db import DB_PATH, DATA_DIR, connect, table_columns
@@ -62,7 +62,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260623-2005-R37"
+APP_VERSION = "Ver. PGY90-G1-260624-0720-R38"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -72,6 +72,7 @@ REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
 REGISTRATION_SUCCESS_KEY = "registration_success_message"
 WEEKLY_REPORT_READ_BACKEND_ENV = "PGY90_WEEKLY_REPORT_READ_BACKEND"
 TREND_READ_BACKEND_ENV = "PGY90_TREND_READ_BACKEND"
+HOME_READ_BACKEND_ENV = "PGY90_HOME_READ_BACKEND"
 
 
 def get_local_today() -> date:
@@ -2222,6 +2223,61 @@ def load_trend_logs_for_display(
         return load_logs(person_name), "sqlite", fallback_warning
 
 
+def get_home_read_backend() -> tuple[str, str | None]:
+    backend = os.environ.get(HOME_READ_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    if backend in {"sqlite", "supabase"}:
+        return backend, None
+    return "sqlite", f"{HOME_READ_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def meal_rows_to_dataframe(rows: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    if "log_date" in df.columns:
+        df["log_date"] = pd.to_datetime(df["log_date"], errors="coerce")
+        df = df.dropna(subset=["log_date"]).sort_values(["log_date", "id"] if "id" in df.columns else ["log_date"])
+    return df
+
+
+def load_home_data_for_display(
+    person_name: str,
+    height_cm: float,
+    sqlite_df: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, str, str | None]:
+    backend, warning = get_home_read_backend()
+    if backend == "sqlite":
+        return (
+            sqlite_df if sqlite_df is not None else load_logs(person_name),
+            load_meals(person_name),
+            "sqlite",
+            warning,
+        )
+
+    try:
+        daily_rows = get_person_daily_logs(person_name, backend="supabase")
+        meal_rows = get_person_meal_logs(person_name, backend="supabase")
+        return (
+            daily_rows_to_trend_dataframe(daily_rows, height_cm),
+            meal_rows_to_dataframe(meal_rows),
+            "supabase",
+            warning,
+        )
+    except Exception as exc:
+        fallback_warning = (
+            f"首頁 Supabase read-only 讀取失敗，已 fallback SQLite："
+            f"{readable_backend_error(exc)}"
+        )
+        if warning:
+            fallback_warning = f"{warning} {fallback_warning}"
+        return (
+            sqlite_df if sqlite_df is not None else load_logs(person_name),
+            load_meals(person_name),
+            "sqlite",
+            fallback_warning,
+        )
+
+
 def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
     sorted_df = df.sort_values("log_date") if not df.empty else df
 
@@ -2255,39 +2311,96 @@ def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
     )
 
 
-def render_today_status_overview(person_name: str, df: pd.DataFrame, height_cm: float) -> None:
+def render_today_status_overview(
+    person_name: str,
+    df: pd.DataFrame,
+    height_cm: float,
+    meals: pd.DataFrame | None = None,
+) -> None:
+    def scalar_value(value):
+        if isinstance(value, pd.Series):
+            cleaned = value.dropna()
+            if cleaned.empty:
+                return None
+            return cleaned.iloc[0]
+        if isinstance(value, pd.DataFrame):
+            cleaned = value.stack(dropna=True)
+            if cleaned.empty:
+                return None
+            return cleaned.iloc[0]
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                scalar = scalar_value(item)
+                if scalar is not None:
+                    return scalar
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            return None
+        return value
+
+    def row_value(row, column: str):
+        if row is None:
+            return None
+        try:
+            if hasattr(row, "index") and column not in row.index:
+                return None
+            value = row[column]
+        except (KeyError, TypeError):
+            return None
+        return scalar_value(value)
+
     def latest_positive(column: str) -> float | None:
         if df.empty or column not in df.columns:
             return None
         values = df.copy()
-        values[column] = pd.to_numeric(values[column], errors="coerce")
+        source = values[column]
+        if isinstance(source, pd.DataFrame):
+            source = source.bfill(axis=1).iloc[:, 0]
+        values[column] = pd.to_numeric(source, errors="coerce")
         values = values[values[column] > 0].dropna(subset=[column]).sort_values("log_date")
         if values.empty:
             return None
-        return float(values.iloc[-1][column])
+        return positive_or_none(row_value(values.iloc[-1], column))
 
     def positive_or_none(value) -> float | None:
-        if value is None or pd.isna(value):
+        value = scalar_value(value)
+        if value is None:
             return None
-        numeric = float(value)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
         return numeric if numeric > 0 else None
 
     def latest_int(value) -> int | None:
         numeric = positive_or_none(value)
         return int(numeric) if numeric is not None else None
 
+    def daily_log_for(target_date: date):
+        if df.empty or "log_date" not in df.columns:
+            return None
+        day_rows = df[df["log_date"].dt.date == target_date]
+        if day_rows.empty:
+            return None
+        return day_rows.sort_values("log_date").iloc[-1]
+
     local_today = get_local_today()
-    today_log = get_daily_log(person_name, local_today)
-    yesterday_log = get_daily_log(person_name, local_today - timedelta(days=1))
+    today_log = daily_log_for(local_today)
+    yesterday_log = daily_log_for(local_today - timedelta(days=1))
     profile = get_coach_profile(person_name)
+    has_today_log = today_log is not None
+    has_yesterday_log = yesterday_log is not None
 
     weight = latest_positive("weight_kg")
     body_fat = latest_positive("body_fat_percent")
     waist = latest_positive("waist_cm")
     bmi = weight / ((height_cm / 100) ** 2) if weight is not None and height_cm > 0 else None
 
-    sleep_hours = positive_or_none(today_log["sleep_hours"]) if today_log else None
-    sleep_quality = latest_int(today_log["sleep_quality"]) if today_log else None
+    sleep_hours = positive_or_none(row_value(today_log, "sleep_hours")) if has_today_log else None
+    sleep_quality = latest_int(row_value(today_log, "sleep_quality")) if has_today_log else None
     if sleep_hours is None and sleep_quality is None:
         sleep_value = "尚未記錄"
     else:
@@ -2299,9 +2412,9 @@ def render_today_status_overview(person_name: str, df: pd.DataFrame, height_cm: 
             sleep_parts.append(f"品質 {sleep_quality}%")
         sleep_value = "，".join(sleep_parts)
 
-    systolic_bp = latest_int(today_log["systolic_bp"]) if today_log else None
-    diastolic_bp = latest_int(today_log["diastolic_bp"]) if today_log else None
-    pulse_bpm = latest_int(today_log["pulse_bpm"]) if today_log else None
+    systolic_bp = latest_int(row_value(today_log, "systolic_bp")) if has_today_log else None
+    diastolic_bp = latest_int(row_value(today_log, "diastolic_bp")) if has_today_log else None
+    pulse_bpm = latest_int(row_value(today_log, "pulse_bpm")) if has_today_log else None
     if systolic_bp is None and diastolic_bp is None and pulse_bpm is None:
         bp_value = "尚未記錄"
     else:
@@ -2319,15 +2432,16 @@ def render_today_status_overview(person_name: str, df: pd.DataFrame, height_cm: 
         systolic_bp=systolic_bp,
         diastolic_bp=diastolic_bp,
         pulse_bpm=pulse_bpm,
-        discomfort_notes=str(today_log["discomfort_notes"] or "") if today_log else "",
-        workout_minutes=int(positive_or_none(today_log["workout_minutes"]) or 0) if today_log else 0,
-        rpe=int(positive_or_none(today_log["rpe"]) or 0) if today_log else 0,
+        discomfort_notes=str(row_value(today_log, "discomfort_notes") or "") if has_today_log else "",
+        workout_minutes=int(positive_or_none(row_value(today_log, "workout_minutes")) or 0) if has_today_log else 0,
+        rpe=int(positive_or_none(row_value(today_log, "rpe")) or 0) if has_today_log else 0,
         health_limitations=(profile["health_limitations"] if profile else "") or "",
-        yesterday_workout_minutes=int(positive_or_none(yesterday_log["workout_minutes"]) or 0) if yesterday_log else 0,
-        yesterday_rpe=int(positive_or_none(yesterday_log["rpe"]) or 0) if yesterday_log else 0,
+        yesterday_workout_minutes=int(positive_or_none(row_value(yesterday_log, "workout_minutes")) or 0) if has_yesterday_log else 0,
+        yesterday_rpe=int(positive_or_none(row_value(yesterday_log, "rpe")) or 0) if has_yesterday_log else 0,
     )
 
-    meals = load_meals(person_name)
+    if meals is None:
+        meals = load_meals(person_name)
     totals = daily_meal_totals(meals, local_today)
     if profile:
         calorie_target = int(profile["daily_calorie_target"] or 0)
@@ -3788,9 +3902,12 @@ def app() -> None:
     height_cm = get_person_height_cm(selected_person)
     targets = get_person_targets(selected_person)
     df = load_logs(selected_person)
-    render_today_status_overview(selected_person, df, height_cm)
+    home_df, home_meals, _home_read_backend, home_read_warning = load_home_data_for_display(selected_person, height_cm, df)
+    if home_read_warning:
+        st.warning(home_read_warning)
+    render_today_status_overview(selected_person, home_df, height_cm, home_meals)
     with st.expander("查看詳細健康指標", expanded=False):
-        metric_cards(df, height_cm)
+        metric_cards(home_df, height_cm)
 
     st.markdown(
         f"目標：{compact_number(targets['target_weight_kg'])} kg，體脂 "
