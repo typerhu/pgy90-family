@@ -19,6 +19,7 @@ import extra_streamlit_components as stx
 import streamlit as st
 
 import ai as meal_ai
+from dashboard_read_models import get_person_weekly_reports
 from db_adapter import CORE_TABLES, get_db_adapter, get_db_backend_name
 from db_sync_status import get_sqlite_supabase_sync_status
 from db import DB_PATH, DATA_DIR, connect, table_columns
@@ -61,7 +62,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260623-1940-R35"
+APP_VERSION = "Ver. PGY90-G1-260623-1951-R36"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -69,6 +70,7 @@ REMEMBER_DAYS = 30
 REMEMBER_DISABLED_KEY = "remember_login_disabled"
 REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
 REGISTRATION_SUCCESS_KEY = "registration_success_message"
+WEEKLY_REPORT_READ_BACKEND_ENV = "PGY90_WEEKLY_REPORT_READ_BACKEND"
 
 
 def get_local_today() -> date:
@@ -2146,6 +2148,38 @@ def get_saved_report(person_name: str, window: WeekWindow) -> sqlite3.Row | None
         ).fetchone()
 
 
+def get_weekly_report_read_backend() -> tuple[str, str | None]:
+    backend = os.environ.get(WEEKLY_REPORT_READ_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    if backend in {"sqlite", "supabase"}:
+        return backend, None
+    return "sqlite", f"{WEEKLY_REPORT_READ_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def get_saved_report_for_display(
+    person_name: str,
+    window: WeekWindow,
+) -> tuple[dict | sqlite3.Row | None, str, str | None]:
+    backend, warning = get_weekly_report_read_backend()
+    if backend == "sqlite":
+        return get_saved_report(person_name, window), "sqlite", warning
+
+    try:
+        reports = get_person_weekly_reports(person_name, backend="supabase")
+        week_start = window.start.isoformat()
+        for report in reports:
+            if str(report.get("week_start") or "") == week_start:
+                return report, "supabase", warning
+        return None, "supabase", warning
+    except Exception as exc:
+        fallback_warning = (
+            f"每週報告 Supabase read-only 讀取失敗，已 fallback SQLite："
+            f"{readable_backend_error(exc)}"
+        )
+        if warning:
+            fallback_warning = f"{warning} {fallback_warning}"
+        return get_saved_report(person_name, window), "sqlite", fallback_warning
+
+
 def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
     sorted_df = df.sort_values("log_date") if not df.empty else df
 
@@ -2772,7 +2806,7 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
         ]
 
     summary = generate_weekly_summary(week_df, window, targets)
-    saved = get_saved_report(person_name, window)
+    saved, weekly_read_backend, weekly_read_warning = get_saved_report_for_display(person_name, window)
 
     render_weekly_compact_summary(df, week_df, window, health_limitations or "")
 
@@ -2781,6 +2815,10 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
             save_weekly_report(person_name, window, summary)
             st.success("已更新本週總結。")
             st.rerun()
+        if weekly_read_warning:
+            st.warning(weekly_read_warning)
+        elif weekly_read_backend == "supabase":
+            st.caption("Weekly report read backend: supabase")
         if saved:
             st.info(f"已儲存：{saved['generated_at']}")
         else:
