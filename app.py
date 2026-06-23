@@ -61,7 +61,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260623-1311-R33"
+APP_VERSION = "Ver. PGY90-G1-260623-1924-R34"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -3523,6 +3523,105 @@ def render_db_sync_status_check() -> None:
     st.caption("此區塊只讀取 SQLite / Supabase row count 與 key 差異，不會寫入任何資料。")
 
 
+def readable_backend_error(exc: Exception) -> str:
+    message = str(exc)
+    if "SUPABASE_URL" in message or "SUPABASE_SERVICE_ROLE_KEY" in message:
+        return "Supabase backend selected but SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing."
+    return message
+
+
+def render_sample_dataframe(rows: list[dict], columns: list[str], empty_message: str) -> None:
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.caption(empty_message)
+        return
+    existing_columns = [column for column in columns if column in df.columns]
+    if not existing_columns:
+        st.caption("欄位不存在。")
+        return
+    st.dataframe(df[existing_columns], use_container_width=True, hide_index=True)
+
+
+def latest_backend_rows(
+    rows: list[dict],
+    sort_columns: list[str],
+    display_columns: list[str],
+    limit: int = 3,
+) -> list[dict]:
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return []
+    existing_sort_columns = [column for column in sort_columns if column in df.columns]
+    if existing_sort_columns:
+        df = df.sort_values(existing_sort_columns, ascending=False, na_position="last")
+    existing_display_columns = [column for column in display_columns if column in df.columns]
+    if not existing_display_columns:
+        return []
+    return df.head(limit)[existing_display_columns].to_dict("records")
+
+
+def render_backend_readonly_pilot() -> None:
+    st.markdown("#### Backend 只讀試點")
+    selected_backend = st.radio(
+        "只讀 backend",
+        ["sqlite", "supabase"],
+        horizontal=True,
+        key="admin_readonly_backend_pilot",
+    )
+
+    try:
+        adapter = get_db_adapter(selected_backend)
+        counts = adapter.table_counts()
+        people_rows = adapter.list_people()
+        daily_rows = adapter.get_daily_logs()
+        meal_rows = adapter.get_meal_logs()
+        weekly_rows = adapter.get_weekly_reports()
+    except Exception as exc:
+        st.warning(readable_backend_error(exc))
+        st.caption("此區塊只供管理員測試 read-only adapter，不會影響正式 app 資料來源。")
+        return
+
+    st.caption(f"目前試點 backend：`{selected_backend}`")
+    count_rows = [
+        {"table": table_name, "row_count": counts.get(table_name, 0)}
+        for table_name in CORE_TABLES
+    ]
+    st.dataframe(pd.DataFrame(count_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("##### Sample summary")
+    st.caption(f"people sample count：{len(people_rows)}")
+
+    st.markdown("最近 3 筆 daily_logs")
+    daily_sample = latest_backend_rows(
+        daily_rows,
+        ["log_date", "created_at"],
+        ["person_name", "log_date", "weight_kg"],
+    )
+    render_sample_dataframe(daily_sample, ["person_name", "log_date", "weight_kg"], "目前沒有 daily_logs sample。")
+
+    st.markdown("最近 3 筆 meal_logs")
+    meal_sample = latest_backend_rows(
+        meal_rows,
+        ["meal_date", "log_date", "created_at", "id"],
+        ["id", "person_name", "meal_date", "log_date", "calories"],
+    )
+    render_sample_dataframe(
+        meal_sample,
+        ["id", "person_name", "meal_date", "log_date", "calories"],
+        "目前沒有 meal_logs sample。",
+    )
+
+    st.markdown("最近 3 筆 weekly_reports")
+    weekly_sample = latest_backend_rows(
+        weekly_rows,
+        ["week_start", "generated_at"],
+        ["person_name", "week_start"],
+    )
+    render_sample_dataframe(weekly_sample, ["person_name", "week_start"], "目前沒有 weekly_reports sample。")
+
+    st.caption("此區塊只讀取 row counts 與少量非敏感 sample，不會寫入 SQLite 或 Supabase。")
+
+
 def admin_panel() -> str | None:
     st.sidebar.markdown("### 管理")
     mode = st.sidebar.radio(
@@ -3546,6 +3645,7 @@ def admin_panel() -> str | None:
 
         render_db_adapter_status_check()
         render_db_sync_status_check()
+        render_backend_readonly_pilot()
 
         st.markdown("#### 重設密碼")
         with st.form("admin_reset_password_form"):
