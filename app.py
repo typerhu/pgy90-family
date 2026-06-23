@@ -19,7 +19,7 @@ import extra_streamlit_components as stx
 import streamlit as st
 
 import ai as meal_ai
-from dashboard_read_models import get_person_weekly_reports
+from dashboard_read_models import get_person_daily_logs, get_person_weekly_reports
 from db_adapter import CORE_TABLES, get_db_adapter, get_db_backend_name
 from db_sync_status import get_sqlite_supabase_sync_status
 from db import DB_PATH, DATA_DIR, connect, table_columns
@@ -62,7 +62,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260623-1951-R36"
+APP_VERSION = "Ver. PGY90-G1-260623-2005-R37"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -71,6 +71,7 @@ REMEMBER_DISABLED_KEY = "remember_login_disabled"
 REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
 REGISTRATION_SUCCESS_KEY = "registration_success_message"
 WEEKLY_REPORT_READ_BACKEND_ENV = "PGY90_WEEKLY_REPORT_READ_BACKEND"
+TREND_READ_BACKEND_ENV = "PGY90_TREND_READ_BACKEND"
 
 
 def get_local_today() -> date:
@@ -2180,6 +2181,47 @@ def get_saved_report_for_display(
         return get_saved_report(person_name, window), "sqlite", fallback_warning
 
 
+def get_trend_read_backend() -> tuple[str, str | None]:
+    backend = os.environ.get(TREND_READ_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    if backend in {"sqlite", "supabase"}:
+        return backend, None
+    return "sqlite", f"{TREND_READ_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def daily_rows_to_trend_dataframe(rows: list[dict], height_cm: float) -> pd.DataFrame:
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    if "log_date" in df.columns:
+        df["log_date"] = pd.to_datetime(df["log_date"], errors="coerce")
+        df = df.dropna(subset=["log_date"]).sort_values("log_date")
+    if "weight_kg" in df.columns:
+        df["weight_kg"] = pd.to_numeric(df["weight_kg"], errors="coerce")
+        df["bmi"] = df["weight_kg"] / ((height_cm / 100) ** 2)
+    return df
+
+
+def load_trend_logs_for_display(
+    person_name: str,
+    height_cm: float,
+) -> tuple[pd.DataFrame, str, str | None]:
+    backend, warning = get_trend_read_backend()
+    if backend == "sqlite":
+        return load_logs(person_name), "sqlite", warning
+
+    try:
+        rows = get_person_daily_logs(person_name, backend="supabase")
+        return daily_rows_to_trend_dataframe(rows, height_cm), "supabase", warning
+    except Exception as exc:
+        fallback_warning = (
+            f"趨勢圖 Supabase read-only 讀取失敗，已 fallback SQLite："
+            f"{readable_backend_error(exc)}"
+        )
+        if warning:
+            fallback_warning = f"{warning} {fallback_warning}"
+        return load_logs(person_name), "sqlite", fallback_warning
+
+
 def metric_cards(df: pd.DataFrame, height_cm: float) -> None:
     sorted_df = df.sort_values("log_date") if not df.empty else df
 
@@ -3764,7 +3806,10 @@ def app() -> None:
     with tab_daily:
         daily_input_page(selected_person)
     with tab_trends:
-        trend_page(load_logs(selected_person), height_cm)
+        trend_df, _trend_read_backend, trend_read_warning = load_trend_logs_for_display(selected_person, height_cm)
+        if trend_read_warning:
+            st.warning(trend_read_warning)
+        trend_page(trend_df, height_cm)
     with tab_weekly:
         weekly_report_page(load_logs(selected_person), selected_person)
 
