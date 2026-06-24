@@ -1,8 +1,8 @@
 """Write adapter skeleton for future PGY90 Supabase cutover.
 
 This module is intentionally not wired into the Streamlit app. It does not
-write to production SQLite or Supabase. R40 only defines the interface,
-validation, and dry-run payload behavior for future write-path pilots.
+write to production SQLite. Supabase writes are limited to the explicit
+weekly_reports pilot path introduced after the isolated R41 test.
 """
 
 from __future__ import annotations
@@ -187,23 +187,76 @@ class SQLiteWriteAdapter(DryRunWriteAdapter):
 
 
 class SupabaseWriteAdapter(DryRunWriteAdapter):
-    """Supabase write adapter skeleton.
+    """Supabase write adapter.
 
-    This class intentionally performs no Supabase insert/update/delete. It can
-    validate payloads without requiring secrets. If a future isolated write test
-    needs a client, it must be added behind an explicit test-only path.
+    By default this class remains dry-run for smoke tests. Passing dry_run=False
+    enables the weekly_reports-only write pilot. Other write methods still use
+    the inherited skeleton behavior.
     """
 
     backend_name = "supabase"
 
-    def __init__(self, require_env: bool = False) -> None:
+    def __init__(self, require_env: bool = False, dry_run: bool = True) -> None:
         self.supabase_url = os.environ.get("SUPABASE_URL")
         self.service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        self.dry_run = dry_run
         if require_env and (not self.supabase_url or not self.service_role_key):
             raise RuntimeError(
                 "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. "
                 "Supabase write adapter skeleton skipped."
             )
+        self._client: Any | None = None
+
+    def _get_client(self) -> Any:
+        if not self.supabase_url or not self.service_role_key:
+            raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.")
+        if self._client is None:
+            try:
+                from supabase import create_client
+            except ImportError as exc:
+                raise RuntimeError("The supabase package is required for Supabase writes.") from exc
+            self._client = create_client(self.supabase_url, self.service_role_key)
+        return self._client
+
+    def save_weekly_report(
+        self,
+        person_name: str,
+        week_start: str,
+        week_end: str,
+        summary: str,
+        generated_at: str | None = None,
+    ) -> WriteResult:
+        payload = build_weekly_report_payload(
+            person_name=person_name,
+            week_start=week_start,
+            week_end=week_end,
+            summary=summary,
+            generated_at=generated_at,
+        )
+        key = {"person_name": payload["person_name"], "week_start": payload["week_start"]}
+        if self.dry_run:
+            return self._result(
+                operation="save_weekly_report",
+                table="weekly_reports",
+                key=key,
+                payload=payload,
+            )
+
+        client = self._get_client()
+        client.table("weekly_reports").upsert(
+            payload,
+            on_conflict="person_name,week_start",
+        ).execute()
+        return WriteResult(
+            backend=self.backend_name,
+            operation="save_weekly_report",
+            table="weekly_reports",
+            key=key,
+            payload=payload,
+            dry_run=False,
+            would_write=True,
+            message="Supabase weekly_reports upsert completed.",
+        )
 
 
 def get_write_backend_name() -> str:

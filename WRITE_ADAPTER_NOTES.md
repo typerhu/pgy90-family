@@ -68,3 +68,21 @@ python3 scripts/test_supabase_weekly_report_write.py --execute
 Execute mode uses the test-only key `__R41_TEST__ | 2099-01-01`, then attempts
 insert, read back, update, cleanup, and cleanup verification. It must not write
 real `person_name` report data, and it must not touch SQLite.
+
+## R42 Weekly Reports Save Pilot
+
+R42 enables one narrow app write pilot for `weekly_reports` only.
+
+- Default behavior remains SQLite.
+- `PGY90_WEEKLY_REPORT_WRITE_BACKEND=sqlite` keeps the original SQLite save path.
+- `PGY90_WEEKLY_REPORT_WRITE_BACKEND=supabase` first saves to SQLite, then attempts
+  a Supabase `weekly_reports` upsert by `person_name + week_start`.
+- Supabase failures are shown as warnings and do not block the SQLite save.
+- No other write paths use the Supabase write adapter.
+
+The following remain out of scope:
+
+- `daily_logs` writes
+- `meal_logs` CRUD
+- `coach_profiles` writes
+- auth / admin writes

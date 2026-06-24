@@ -31,6 +31,7 @@ from meals import (
     save_meal_log,
     update_meal_log,
 )
+from write_adapter import SupabaseWriteAdapter
 
 
 # Imports / Config
@@ -62,7 +63,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-0738-R41"
+APP_VERSION = "Ver. PGY90-G1-260624-1325-R42"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -71,6 +72,7 @@ REMEMBER_DISABLED_KEY = "remember_login_disabled"
 REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
 REGISTRATION_SUCCESS_KEY = "registration_success_message"
 WEEKLY_REPORT_READ_BACKEND_ENV = "PGY90_WEEKLY_REPORT_READ_BACKEND"
+WEEKLY_REPORT_WRITE_BACKEND_ENV = "PGY90_WEEKLY_REPORT_WRITE_BACKEND"
 TREND_READ_BACKEND_ENV = "PGY90_TREND_READ_BACKEND"
 HOME_READ_BACKEND_ENV = "PGY90_HOME_READ_BACKEND"
 
@@ -2119,7 +2121,15 @@ def render_weekly_compact_summary(
         st.markdown(f"- {bullet}")
 
 
-def save_weekly_report(person_name: str, window: WeekWindow, summary: str) -> None:
+def get_weekly_report_write_backend() -> tuple[str, str | None]:
+    backend = os.environ.get(WEEKLY_REPORT_WRITE_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    if backend in {"sqlite", "supabase"}:
+        return backend, None
+    return "sqlite", f"{WEEKLY_REPORT_WRITE_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def save_weekly_report(person_name: str, window: WeekWindow, summary: str) -> tuple[str, str | None]:
+    generated_at = datetime.now().isoformat(timespec="seconds")
     with connect() as conn:
         conn.execute(
             """
@@ -2137,8 +2147,27 @@ def save_weekly_report(person_name: str, window: WeekWindow, summary: str) -> No
                 window.start.isoformat(),
                 window.end.isoformat(),
                 summary,
-                datetime.now().isoformat(timespec="seconds"),
+                generated_at,
             ),
+        )
+    backend, warning = get_weekly_report_write_backend()
+    if backend != "supabase":
+        return "sqlite", warning
+
+    try:
+        SupabaseWriteAdapter(require_env=True, dry_run=False).save_weekly_report(
+            person_name=person_name,
+            week_start=window.start.isoformat(),
+            week_end=window.end.isoformat(),
+            summary=summary,
+            generated_at=generated_at,
+        )
+        return "supabase", warning
+    except Exception as exc:
+        return (
+            "sqlite",
+            "本週報告已保存到 SQLite；Supabase write pilot 失敗，未影響本機保存："
+            f"{readable_backend_error(exc)}",
         )
 
 
@@ -2963,14 +2992,25 @@ def weekly_report_page(df: pd.DataFrame, person_name: str) -> None:
 
     summary = generate_weekly_summary(week_df, window, targets)
     saved, weekly_read_backend, weekly_read_warning = get_saved_report_for_display(person_name, window)
+    weekly_save_status_key = f"weekly_save_status_{person_name}_{window.start.isoformat()}"
 
     render_weekly_compact_summary(df, week_df, window, health_limitations or "")
 
     with st.expander("查看完整每週報告", expanded=False):
         if st.button("產生 / 更新本週總結", use_container_width=True):
-            save_weekly_report(person_name, window, summary)
-            st.success("已更新本週總結。")
+            weekly_write_backend, weekly_write_warning = save_weekly_report(person_name, window, summary)
+            st.session_state[weekly_save_status_key] = {
+                "backend": weekly_write_backend,
+                "warning": weekly_write_warning,
+            }
             st.rerun()
+        save_status = st.session_state.pop(weekly_save_status_key, None)
+        if save_status:
+            st.success("已更新本週總結。")
+            if save_status.get("warning"):
+                st.warning(save_status["warning"])
+            elif save_status.get("backend") == "supabase":
+                st.caption("Weekly report write pilot: supabase")
         if weekly_read_warning:
             st.warning(weekly_read_warning)
         elif weekly_read_backend == "supabase":
