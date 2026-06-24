@@ -65,7 +65,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-2154-R51"
+APP_VERSION = "Ver. PGY90-G1-260624-2218-R52"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1530,17 +1530,109 @@ def extract_post_meal_draft_from_pre_meal_analysis(analysis_text: str) -> str:
     return "\n".join(lines)
 
 
-def remember_meal_ai_notes(person_name: str, selected_date: date, estimate: dict) -> None:
-    notes = {
-        key: estimate[key]
-        for key in ("coach_note", "next_meal_suggestion", "warning_note")
-        if estimate.get(key)
-    }
-    if notes:
+def meal_ai_note_payload(
+    estimate: dict,
+    totals: dict | None = None,
+    nutrition_targets: dict | None = None,
+) -> dict:
+    meal_type = str(estimate.get("meal_type") or "")
+    calories = int(float(estimate.get("calories") or 0))
+    protein = float(estimate.get("protein_g") or 0)
+    fiber = float(estimate.get("fiber_g") or 0)
+    totals = totals or {}
+    nutrition_targets = nutrition_targets or {}
+    target_calories = int(float(nutrition_targets.get("calories") or 0))
+    target_protein = float(nutrition_targets.get("protein_g") or 0)
+    target_fiber = float(nutrition_targets.get("fiber_g") or 0)
+    after_calories = int(float(totals.get("calories") or 0) + calories)
+    after_protein = float(totals.get("protein_g") or 0) + protein
+    after_fiber = float(totals.get("fiber_g") or 0) + fiber
+    calorie_gap = target_calories - after_calories if target_calories else None
+    protein_gap = target_protein - after_protein if target_protein else None
+    fiber_gap = target_fiber - after_fiber if target_fiber else None
+
+    if meal_type == "早餐":
+        summary = [
+            "午餐策略：優先補足蛋白質與蔬菜，讓下午比較穩。",
+            f"今日方向：這餐約 {calories} kcal，午餐可用清楚主食份量來控制總量。",
+        ]
+        if protein_gap is not None and protein_gap > 20:
+            summary.append("蛋白質補法：午餐可加雞蛋、雞胸、魚、豆腐或希臘優格。")
+        elif fiber_gap is not None and fiber_gap > 8:
+            summary.append("纖維補法：午餐加一份蔬菜或水果，今天會更好收。")
+    elif meal_type == "午餐":
+        summary = [
+            "晚餐策略：晚餐先看今日剩餘額度，蛋白質夠就以清淡蔬菜和適量主食收尾。",
+        ]
+        if calorie_gap is not None:
+            summary.append(f"今日剩餘熱量：約 {calorie_gap} kcal，晚餐份量可依這個範圍調整。")
+        if calorie_gap is not None and calorie_gap < 350:
+            summary.append("晚餐提醒：若剩餘熱量不多，建議少油炸、少含糖飲料。")
+    elif meal_type == "晚餐":
+        summary = [
+            "今日收尾：晚餐後先看總量與飽足感，今晚不建議再用宵夜補熱量。",
+        ]
+        if calorie_gap is not None and calorie_gap <= 0:
+            summary.append("今晚宵夜：目前熱量已接近或超過目標，建議避免宵夜。")
+        else:
+            summary.append("今晚宵夜：如果真的餓，選無糖飲品或很輕量蛋白質，不再開大餐。")
+        if protein_gap is not None and protein_gap > 15:
+            summary.append("明日早餐建議：可用雞蛋、乳清或希臘優格補蛋白質。")
+        else:
+            summary.append("明日早餐建議：蛋白質若已足夠，優先補纖維與穩定主食。")
+    else:
+        summary = [
+            "今日總量提醒：點心 / 宵夜容易推高熱量，接下來以總量穩定為主。",
+        ]
+        if calorie_gap is not None and calorie_gap < 0:
+            summary.append("明日修正：明早先回到高蛋白、足纖維、低油的簡單早餐。")
+        else:
+            summary.append("明日修正：不需要補償，明早回到清淡、足蛋白與足纖維即可。")
+
+    full_notes: list[str] = []
+    for key in ("coach_note", "warning_note"):
+        if estimate.get(key):
+            full_notes.append(str(estimate[key]))
+    if estimate.get("next_meal_suggestion"):
+        suggestion = str(estimate["next_meal_suggestion"])
+        if meal_type == "晚餐":
+            suggestion = suggestion.replace("下一餐", "明日早餐").replace("下餐", "明日早餐")
+            full_notes.append(f"明日早餐方向：{suggestion}")
+        elif meal_type == "點心":
+            suggestion = suggestion.replace("下一餐", "明日飲食").replace("下餐", "明日飲食")
+            full_notes.append(f"明日修正方向：{suggestion}")
+        else:
+            full_notes.append(suggestion)
+    return {"summary": summary[:3], "full": full_notes}
+
+
+def remember_meal_ai_notes(
+    person_name: str,
+    selected_date: date,
+    estimate: dict,
+    totals: dict | None = None,
+    nutrition_targets: dict | None = None,
+) -> None:
+    payload = meal_ai_note_payload(estimate, totals, nutrition_targets)
+    if payload.get("summary") or payload.get("full"):
         st.session_state[f"latest_meal_ai_notes_{person_name}"] = {
             "log_date": selected_date.isoformat(),
-            "notes": notes,
+            "notes": payload,
         }
+
+
+def render_meal_ai_notes(notes: dict) -> None:
+    summary = list(notes.get("summary") or [])
+    full = list(notes.get("full") or [])
+    if not summary and not full:
+        return
+    st.markdown("##### 剛剛這餐的 AI 建議")
+    for note in summary[:3]:
+        st.info(note)
+    if full:
+        with st.expander("查看完整分析", expanded=False):
+            for note in full:
+                st.write(note)
 
 
 def show_latest_meal_ai_notes(person_name: str, selected_date: date) -> None:
@@ -1549,9 +1641,7 @@ def show_latest_meal_ai_notes(person_name: str, selected_date: date) -> None:
         return
     notes = latest.get("notes") or {}
     if notes:
-        st.markdown("#### 剛剛這餐的 AI 建議")
-        for note in notes.values():
-            st.info(note)
+        render_meal_ai_notes(notes)
 
 
 def analyze_meal_text_with_context(description: str, meal_type_override: str, coach_context: dict) -> dict:
@@ -3308,7 +3398,6 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
 
     for item in coach_feedback(totals, profile):
         st.info(item)
-    show_latest_meal_ai_notes(person_name, selected_date)
 
     st.markdown("#### 餐食輸入")
     pre_meal_result_key = f"pre_meal_analysis_result_{person_name}_{selected_date.isoformat()}"
@@ -3356,7 +3445,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                     key=f"unified_post_text_{person_name}",
                 )
                 meal_type_override = st.selectbox("餐別", ["自動判斷", *MEAL_TYPES])
-                submitted = st.form_submit_button("AI 估算並建立草稿", use_container_width=True)
+                submitted = st.form_submit_button("估算這餐", use_container_width=True)
 
             if submitted:
                 cleaned = text.strip()
@@ -3379,7 +3468,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         )
                         st.warning(f"AI 估算未使用，已改用本機規則估算。原因：{error}")
                     set_meal_draft(estimate, "AI 文字估算")
-                    st.success("已建立餐後記錄草稿，請確認或修改後保存。")
+                    st.success("已估算完成，請確認後儲存。")
 
         elif input_method == "上傳 / 拍照":
             photo_source = st.radio(
@@ -3411,7 +3500,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 key=f"unified_photo_meal_type_{person_name}",
             )
             photo_file = captured_photo or uploaded_photo
-            if st.button("AI 辨識照片並建立草稿", use_container_width=True, key=f"unified_photo_estimate_{person_name}"):
+            if st.button("估算這餐", use_container_width=True, key=f"unified_photo_estimate_{person_name}"):
                 if photo_file is None:
                     st.warning("先拍照或上傳一張餐食照片。")
                 elif not get_openai_api_key():
@@ -3426,7 +3515,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                                 meal_ai_context,
                             )
                         set_meal_draft(estimate, "AI 照片估算")
-                        st.success("已建立餐後記錄草稿，請確認或修改後保存。")
+                        st.success("已估算完成，請確認後儲存。")
                     except json.JSONDecodeError:
                         st.error("照片辨識回傳格式不完整，請換一張更清楚的照片或改用文字描述。")
                     except RuntimeError as error:
@@ -3446,7 +3535,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 manual_fiber = st.number_input("纖維 g", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key=f"manual_fiber_{person_name}")
                 manual_carbs = st.number_input("碳水 g", min_value=0.0, max_value=500.0, value=0.0, step=0.5, key=f"manual_carbs_{person_name}")
                 manual_fat = st.number_input("脂肪 g", min_value=0.0, max_value=300.0, value=0.0, step=0.5, key=f"manual_fat_{person_name}")
-                manual_submitted = st.form_submit_button("建立手動草稿", use_container_width=True)
+                manual_submitted = st.form_submit_button("估算這餐", use_container_width=True)
 
             if manual_submitted:
                 cleaned_description = manual_description.strip()
@@ -3467,7 +3556,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         },
                         "手動輸入",
                     )
-                    st.success("已建立手動餐後記錄草稿，請確認後保存。")
+                    st.success("已估算完成，請確認後儲存。")
 
     else:
         if input_method == "文字描述":
@@ -3574,7 +3663,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                     f"- 纖維：約 {pre_manual_fiber:.1f} g\n"
                     f"- 碳水：約 {pre_manual_carbs:.1f} g\n"
                     f"- 脂肪：約 {pre_manual_fat:.1f} g\n\n"
-                    "如果實際吃了，可以轉成餐後記錄草稿後再保存。"
+                    "如果實際吃了，可以轉成餐後記錄後再儲存。"
                 )
                 set_meal_draft(
                     {
@@ -3595,20 +3684,20 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
         if st.session_state.get(pre_meal_result_key):
             st.markdown("##### 餐前分析結果")
             st.markdown(st.session_state[pre_meal_result_key])
-            if st.button("轉為餐後記錄草稿", use_container_width=True, key=f"unified_pre_to_post_draft_{person_name}"):
+            if st.button("轉為餐後記錄", use_container_width=True, key=f"unified_pre_to_post_draft_{person_name}"):
                 draft_text = extract_post_meal_draft_from_pre_meal_analysis(st.session_state[pre_meal_result_key])
                 estimate = estimate_nutrition(draft_text)
                 estimate["description"] = draft_text
                 estimate["meal_type"] = detect_meal_type(draft_text)
                 estimate["confidence"] = "餐前轉入"
                 set_meal_draft(estimate, "餐前分析轉入")
-                st.success("已轉為餐後記錄草稿，請依實際吃的內容確認後保存。")
+                st.success("已轉為餐後記錄，請依實際吃的內容確認後儲存。")
 
     draft = st.session_state.get(unified_draft_key)
     if draft:
-        st.markdown("##### 確認 / 修改餐後記錄")
+        st.markdown("##### 確認餐食資料")
         if not draft.get("can_save", True):
-            st.info("目前是餐前參考草稿，不會自動保存。若實際吃了，請先按「轉為餐後記錄草稿」。")
+            st.info("目前是餐前參考，不會自動儲存。若實際吃了，請先按「轉為餐後記錄」。")
         suffix = st.session_state.get(unified_draft_version_key, 0)
         default_meal_type = draft["meal_type"] if draft["meal_type"] in MEAL_TYPES else "點心"
         with st.form(f"unified_confirm_meal_form_{person_name}_{suffix}"):
@@ -3630,10 +3719,12 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             confirmed_carbs = st.number_input("碳水 g", min_value=0.0, max_value=500.0, value=float(draft["carbs_g"]), step=0.5, key=f"confirm_carbs_{person_name}_{suffix}")
             confirmed_fat = st.number_input("脂肪 g", min_value=0.0, max_value=300.0, value=float(draft["fat_g"]), step=0.5, key=f"confirm_fat_{person_name}_{suffix}")
             save_draft = st.form_submit_button(
-                "保存到今日餐食",
+                "儲存這餐",
                 use_container_width=True,
                 disabled=not draft.get("can_save", True),
             )
+
+        render_meal_ai_notes(meal_ai_note_payload(draft, totals, nutrition_targets))
 
         if save_draft:
             cleaned_description = confirmed_description.strip()
@@ -3671,10 +3762,13 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                             "fat_g": confirmed_fat,
                         }
                     )
-                    remember_meal_ai_notes(person_name, selected_date, estimate_for_notes)
+                    remember_meal_ai_notes(person_name, selected_date, estimate_for_notes, totals, nutrition_targets)
                 st.session_state.pop(unified_draft_key, None)
-                st.success("已保存到今日餐食。")
+                st.success("已儲存這餐。")
                 st.rerun()
+
+    if not draft:
+        show_latest_meal_ai_notes(person_name, selected_date)
 
     st.markdown("#### 今日餐食")
     if meals.empty:
