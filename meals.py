@@ -1,16 +1,48 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from datetime import date, datetime
 
 import pandas as pd
 
 from db import connect
+from write_adapter import SupabaseWriteAdapter
 
 
-def save_meal_log(values: dict) -> None:
+MEAL_LOG_WRITE_BACKEND_ENV = "PGY90_MEAL_LOG_WRITE_BACKEND"
+
+
+def _meal_write_backend() -> tuple[str, str | None]:
+    backend = os.environ.get(MEAL_LOG_WRITE_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    if backend in {"sqlite", "supabase"}:
+        return backend, None
+    return "sqlite", f"{MEAL_LOG_WRITE_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def _readable_write_error(exc: Exception) -> str:
+    message = str(exc)
+    if "SUPABASE_URL" in message or "SUPABASE_SERVICE_ROLE_KEY" in message:
+        return "Supabase backend selected but SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing."
+    return message or exc.__class__.__name__
+
+
+def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    return dict(row)
+
+
+def _get_meal_by_id(meal_id: int) -> dict | None:
     with connect() as conn:
-        conn.execute(
+        row = conn.execute("SELECT * FROM meal_logs WHERE id = ?", (meal_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def save_meal_log(values: dict) -> tuple[str, str | None]:
+    created_at = datetime.now().isoformat(timespec="seconds")
+    with connect() as conn:
+        cursor = conn.execute(
             """
             INSERT INTO meal_logs (
                 person_name, log_date, meal_type, description, calories, protein_g,
@@ -20,11 +52,27 @@ def save_meal_log(values: dict) -> None:
                 :fiber_g, :carbs_g, :fat_g, :confidence, :created_at
             )
             """,
-            {**values, "created_at": datetime.now().isoformat(timespec="seconds")},
+            {**values, "created_at": created_at},
+        )
+        meal_id = int(cursor.lastrowid)
+        saved_row = conn.execute("SELECT * FROM meal_logs WHERE id = ?", (meal_id,)).fetchone()
+    backend, warning = _meal_write_backend()
+    if backend != "supabase":
+        return "sqlite", warning
+
+    try:
+        payload = _row_to_dict(saved_row) or {**values, "id": meal_id, "created_at": created_at}
+        SupabaseWriteAdapter(require_env=True, dry_run=False).save_meal_log(payload)
+        return "supabase", warning
+    except Exception as exc:
+        return (
+            "sqlite",
+            "餐食紀錄已保存到 SQLite；Supabase meal_logs write pilot 失敗，未影響本機保存："
+            f"{_readable_write_error(exc)}",
         )
 
 
-def update_meal_log(meal_id: int, values: dict) -> None:
+def update_meal_log(meal_id: int, values: dict) -> tuple[str, str | None]:
     with connect() as conn:
         conn.execute(
             """
@@ -42,11 +90,43 @@ def update_meal_log(meal_id: int, values: dict) -> None:
             """,
             {**values, "id": meal_id},
         )
+        saved_row = conn.execute("SELECT * FROM meal_logs WHERE id = ?", (meal_id,)).fetchone()
+    backend, warning = _meal_write_backend()
+    if backend != "supabase":
+        return "sqlite", warning
+
+    try:
+        payload = _row_to_dict(saved_row)
+        if not payload:
+            return "sqlite", "餐食紀錄已更新 SQLite；Supabase meal_logs pilot 找不到可同步的本機 row。"
+        SupabaseWriteAdapter(require_env=True, dry_run=False).update_meal_log(meal_id, payload)
+        return "supabase", warning
+    except Exception as exc:
+        return (
+            "sqlite",
+            "餐食紀錄已更新 SQLite；Supabase meal_logs write pilot 失敗，未影響本機更新："
+            f"{_readable_write_error(exc)}",
+        )
 
 
-def delete_meal_log(meal_id: int) -> None:
+def delete_meal_log(meal_id: int) -> tuple[str, str | None]:
+    existing = _get_meal_by_id(meal_id)
     with connect() as conn:
         conn.execute("DELETE FROM meal_logs WHERE id = ?", (meal_id,))
+    backend, warning = _meal_write_backend()
+    if backend != "supabase":
+        return "sqlite", warning
+
+    try:
+        person_name = existing.get("person_name") if existing else None
+        SupabaseWriteAdapter(require_env=True, dry_run=False).delete_meal_log(meal_id, person_name)
+        return "supabase", warning
+    except Exception as exc:
+        return (
+            "sqlite",
+            "餐食紀錄已從 SQLite 刪除；Supabase meal_logs write pilot 失敗，請稍後檢查同步狀態："
+            f"{_readable_write_error(exc)}",
+        )
 
 
 def load_meals(person_name: str) -> pd.DataFrame:

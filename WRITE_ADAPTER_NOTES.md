@@ -102,3 +102,23 @@ R43 enables one additional app write pilot for `daily_logs` only.
 
 The Supabase daily log payload is restricted to known `daily_logs` columns and
 converts `rehab_done` to a boolean-compatible value.
+
+## R44 Meal Logs CRUD Pilot
+
+R44 enables one additional app write pilot for `meal_logs` CRUD only.
+
+- Default behavior remains SQLite.
+- `PGY90_MEAL_LOG_WRITE_BACKEND=sqlite` keeps the original SQLite save, update,
+  and delete paths.
+- `PGY90_MEAL_LOG_WRITE_BACKEND=supabase` keeps SQLite as the baseline, then
+  attempts the matching Supabase operation after SQLite succeeds.
+- Meal insert and update use the SQLite `meal_logs.id` as the Supabase row key.
+- Meal delete deletes only the matching Supabase `id`, scoped by `person_name`
+  when the local row is available before deletion.
+- Supabase failures are shown as warnings and do not roll back the SQLite result.
+
+The following remain out of scope:
+
+- `coach_profiles` writes
+- auth / admin writes
+- Supabase schema changes

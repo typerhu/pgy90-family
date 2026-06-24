@@ -63,7 +63,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-1340-R43"
+APP_VERSION = "Ver. PGY90-G1-260624-1358-R44"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -3127,6 +3127,13 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     coach_date_key = f"coach_date_{person_name}"
     prepare_local_date_input_state(coach_date_key)
     selected_date = st.date_input("記錄日期", key=coach_date_key)
+    meal_write_status_key = f"meal_write_status_{person_name}_{selected_date.isoformat()}"
+    meal_write_status = st.session_state.pop(meal_write_status_key, None)
+    if meal_write_status:
+        if meal_write_status.get("warning"):
+            st.warning(meal_write_status["warning"])
+        elif meal_write_status.get("backend") == "supabase":
+            st.caption("Meal log write pilot: supabase")
     meals = load_meals(person_name)
     totals = daily_meal_totals(meals, selected_date)
     profile = get_coach_profile(person_name)
@@ -3281,7 +3288,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         else meal_type_override
                     )
                     st.warning(f"AI 估算未使用，已改用本機規則估算。原因：{error}")
-                save_meal_log(
+                meal_write_backend, meal_write_warning = save_meal_log(
                     {
                         "person_name": person_name,
                         "log_date": selected_date.isoformat(),
@@ -3295,6 +3302,10 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         "confidence": estimate["confidence"],
                     }
                 )
+                st.session_state[meal_write_status_key] = {
+                    "backend": meal_write_backend,
+                    "warning": meal_write_warning,
+                }
                 st.success(
                     "已加入："
                     f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
@@ -3339,7 +3350,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                             photo_meal_type,
                             meal_ai_context,
                         )
-                    save_meal_log(
+                    meal_write_backend, meal_write_warning = save_meal_log(
                         {
                             "person_name": person_name,
                             "log_date": selected_date.isoformat(),
@@ -3353,6 +3364,10 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                             "confidence": estimate["confidence"],
                         }
                     )
+                    st.session_state[meal_write_status_key] = {
+                        "backend": meal_write_backend,
+                        "warning": meal_write_warning,
+                    }
                     st.success(
                         "已加入："
                         f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
@@ -3485,7 +3500,11 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                                     "fat_g": edited_fat,
                                     "confidence": "手動",
                                 }
-                            update_meal_log(meal_id, update_values)
+                            meal_write_backend, meal_write_warning = update_meal_log(meal_id, update_values)
+                            st.session_state[meal_write_status_key] = {
+                                "backend": meal_write_backend,
+                                "warning": meal_write_warning,
+                            }
                             if reestimate_edit:
                                 remember_meal_ai_notes(person_name, selected_date, estimate)
                             st.success("已更新。")
@@ -3498,7 +3517,11 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         disabled=not confirm_delete,
                         use_container_width=True,
                     ):
-                        delete_meal_log(meal_id)
+                        meal_write_backend, meal_write_warning = delete_meal_log(meal_id)
+                        st.session_state[meal_write_status_key] = {
+                            "backend": meal_write_backend,
+                            "warning": meal_write_warning,
+                        }
                         st.success("已刪除。")
                         st.rerun()
 

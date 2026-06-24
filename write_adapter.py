@@ -51,6 +51,20 @@ DAILY_LOG_COLUMNS = {
     "diastolic_bp",
     "pulse_bpm",
 }
+MEAL_LOG_COLUMNS = {
+    "id",
+    "person_name",
+    "log_date",
+    "meal_type",
+    "description",
+    "calories",
+    "protein_g",
+    "fiber_g",
+    "carbs_g",
+    "fat_g",
+    "confidence",
+    "created_at",
+}
 
 
 @dataclass(frozen=True)
@@ -148,6 +162,23 @@ def build_daily_log_payload(values: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def build_meal_log_payload(values: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: _blank_to_none(value)
+        for key, value in dict(values).items()
+        if key in MEAL_LOG_COLUMNS
+    }
+    payload["person_name"] = _required_text(payload.get("person_name"), "person_name")
+    payload["log_date"] = _required_text(payload.get("log_date"), "log_date")
+    payload["meal_type"] = _required_text(payload.get("meal_type"), "meal_type")
+    payload["description"] = _required_text(payload.get("description"), "description")
+    payload["confidence"] = _required_text(payload.get("confidence"), "confidence")
+    payload["created_at"] = payload.get("created_at") or datetime.now().isoformat(timespec="seconds")
+    if payload.get("id") is not None:
+        payload["id"] = int(payload["id"])
+    return payload
+
+
 class DryRunWriteAdapter:
     backend_name = "dry-run"
 
@@ -203,24 +234,24 @@ class DryRunWriteAdapter:
         )
 
     def save_meal_log(self, values: dict[str, Any]) -> WriteResult:
-        person_name = _required_text(values.get("person_name"), "person_name")
-        log_date = _required_text(values.get("log_date"), "log_date")
+        payload = build_meal_log_payload(values)
         return self._result(
             operation="save_meal_log",
             table="meal_logs",
-            key={"person_name": person_name, "log_date": log_date},
-            payload=dict(values),
+            key={"id": payload.get("id")},
+            payload=payload,
             message="Skeleton only. Future implementation must define id handling.",
         )
 
     def update_meal_log(self, meal_id: int, values: dict[str, Any]) -> WriteResult:
         if int(meal_id) <= 0:
             raise ValueError("meal_id must be positive.")
+        payload = build_meal_log_payload({**values, "id": int(meal_id)})
         return self._result(
             operation="update_meal_log",
             table="meal_logs",
             key={"id": int(meal_id)},
-            payload=dict(values),
+            payload=payload,
             message="Skeleton only. Future implementation must scope update by person.",
         )
 
@@ -355,6 +386,85 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
             dry_run=False,
             would_write=True,
             message="Supabase daily_logs upsert completed.",
+        )
+
+    def save_meal_log(self, values: dict[str, Any]) -> WriteResult:
+        payload = build_meal_log_payload(values)
+        key = {"id": payload.get("id")}
+        if self.dry_run:
+            return self._result(
+                operation="save_meal_log",
+                table="meal_logs",
+                key=key,
+                payload=payload,
+            )
+
+        client = self._get_client()
+        client.table("meal_logs").upsert(payload, on_conflict="id").execute()
+        return WriteResult(
+            backend=self.backend_name,
+            operation="save_meal_log",
+            table="meal_logs",
+            key=key,
+            payload=payload,
+            dry_run=False,
+            would_write=True,
+            message="Supabase meal_logs upsert completed.",
+        )
+
+    def update_meal_log(self, meal_id: int, values: dict[str, Any]) -> WriteResult:
+        if int(meal_id) <= 0:
+            raise ValueError("meal_id must be positive.")
+        payload = build_meal_log_payload({**values, "id": int(meal_id)})
+        key = {"id": int(meal_id)}
+        if self.dry_run:
+            return self._result(
+                operation="update_meal_log",
+                table="meal_logs",
+                key=key,
+                payload=payload,
+            )
+
+        client = self._get_client()
+        client.table("meal_logs").upsert(payload, on_conflict="id").execute()
+        return WriteResult(
+            backend=self.backend_name,
+            operation="update_meal_log",
+            table="meal_logs",
+            key=key,
+            payload=payload,
+            dry_run=False,
+            would_write=True,
+            message="Supabase meal_logs update upsert completed.",
+        )
+
+    def delete_meal_log(self, meal_id: int, person_name: str | None = None) -> WriteResult:
+        if int(meal_id) <= 0:
+            raise ValueError("meal_id must be positive.")
+        key: dict[str, Any] = {"id": int(meal_id)}
+        if person_name:
+            key["person_name"] = person_name
+        if self.dry_run:
+            return self._result(
+                operation="delete_meal_log",
+                table="meal_logs",
+                key=key,
+                message="Validated only. No data was deleted.",
+            )
+
+        query = self._get_client().table("meal_logs").delete().eq("id", int(meal_id))
+        if person_name:
+            query = query.eq("person_name", person_name)
+        query.execute()
+        return WriteResult(
+            backend=self.backend_name,
+            operation="delete_meal_log",
+            table="meal_logs",
+            key=key,
+            payload={},
+            dry_run=False,
+            would_write=True,
+            message="Supabase meal_logs delete completed.",
         )
 
 

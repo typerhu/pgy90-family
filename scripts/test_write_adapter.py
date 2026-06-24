@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
 from write_adapter import (
     SupabaseWriteAdapter,
     build_daily_log_payload,
+    build_meal_log_payload,
     build_weekly_report_payload,
     get_write_adapter,
 )
@@ -78,6 +79,37 @@ def main() -> int:
     print(f"- supabase daily_logs dry-run: {scrub_result(daily_result)}")
     if not daily_result.dry_run or not daily_result.would_write:
         print("ERROR: Supabase daily_logs adapter did not return dry-run result.", file=sys.stderr)
+        return 1
+
+    meal_payload = build_meal_log_payload(
+        {
+            "id": 12345,
+            "person_name": "TYP",
+            "log_date": "2026-06-24",
+            "meal_type": "test",
+            "description": "R44 dry-run meal log payload.",
+            "calories": 123,
+            "protein_g": 12.0,
+            "fiber_g": 3.0,
+            "carbs_g": 20.0,
+            "fat_g": 4.0,
+            "confidence": "dry-run",
+            "created_at": "2026-06-24T08:00:00",
+            "ignored_field": "not exported",
+        }
+    )
+    print(f"- meal log payload fields: {sorted(meal_payload.keys())}")
+    meal_save_result = supabase_adapter.save_meal_log(meal_payload)
+    meal_update_result = supabase_adapter.update_meal_log(int(meal_payload["id"]), meal_payload)
+    meal_delete_result = supabase_adapter.delete_meal_log(int(meal_payload["id"]), "TYP")
+    print(f"- supabase meal_logs save dry-run: {scrub_result(meal_save_result)}")
+    print(f"- supabase meal_logs update dry-run: {scrub_result(meal_update_result)}")
+    print(f"- supabase meal_logs delete dry-run: {scrub_result(meal_delete_result)}")
+    if not all(
+        result.dry_run and result.would_write
+        for result in [meal_save_result, meal_update_result, meal_delete_result]
+    ):
+        print("ERROR: Supabase meal_logs adapter did not return dry-run results.", file=sys.stderr)
         return 1
 
     if has_supabase_env():
