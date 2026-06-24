@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import date, datetime
+from typing import Any
 
 import pandas as pd
 
@@ -37,6 +38,144 @@ def _get_meal_by_id(meal_id: int) -> dict | None:
     with connect() as conn:
         row = conn.execute("SELECT * FROM meal_logs WHERE id = ?", (meal_id,)).fetchone()
     return _row_to_dict(row)
+
+
+def _sqlite_favorite_meals(person_name: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM favorite_meals
+            WHERE person_name = ?
+            ORDER BY updated_at DESC, name
+            """,
+            (person_name,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_favorite_meals(person_name: str) -> tuple[list[dict[str, Any]], str | None]:
+    backend, warning = _meal_write_backend()
+    if backend == "supabase":
+        try:
+            return (
+                SupabaseWriteAdapter(require_env=True, dry_run=False).list_favorite_meals(person_name),
+                warning,
+            )
+        except Exception as exc:
+            return (
+                _sqlite_favorite_meals(person_name),
+                "常用餐食暫時無法從 Supabase 讀取，已改用本機資料："
+                f"{_readable_write_error(exc)}",
+            )
+    return _sqlite_favorite_meals(person_name), warning
+
+
+def save_favorite_meal(values: dict[str, Any]) -> tuple[str, str | None]:
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = {
+        "person_name": str(values.get("person_name") or "").strip(),
+        "name": str(values.get("name") or "").strip(),
+        "meal_type": str(values.get("meal_type") or "點心").strip(),
+        "description": str(values.get("description") or "").strip(),
+        "calories": int(values.get("calories") or 0),
+        "protein_g": float(values.get("protein_g") or 0),
+        "fiber_g": float(values.get("fiber_g") or 0),
+        "carbs_g": float(values.get("carbs_g") or 0),
+        "fat_g": float(values.get("fat_g") or 0),
+        "created_at": now,
+        "updated_at": now,
+    }
+    if not payload["person_name"] or not payload["name"] or not payload["description"]:
+        return "sqlite", "常用餐食缺少名稱或描述，未加入常用餐食。"
+
+    with connect() as conn:
+        existing = conn.execute(
+            """
+            SELECT created_at
+            FROM favorite_meals
+            WHERE person_name = ? AND name = ?
+            """,
+            (payload["person_name"], payload["name"]),
+        ).fetchone()
+        if existing:
+            payload["created_at"] = existing["created_at"]
+        cursor = conn.execute(
+            """
+            INSERT INTO favorite_meals (
+                person_name, name, meal_type, description, calories, protein_g,
+                fiber_g, carbs_g, fat_g, created_at, updated_at
+            ) VALUES (
+                :person_name, :name, :meal_type, :description, :calories, :protein_g,
+                :fiber_g, :carbs_g, :fat_g, :created_at, :updated_at
+            )
+            ON CONFLICT(person_name, name) DO UPDATE SET
+                meal_type = excluded.meal_type,
+                description = excluded.description,
+                calories = excluded.calories,
+                protein_g = excluded.protein_g,
+                fiber_g = excluded.fiber_g,
+                carbs_g = excluded.carbs_g,
+                fat_g = excluded.fat_g,
+                updated_at = excluded.updated_at
+            """,
+            payload,
+        )
+        favorite_id = int(cursor.lastrowid or 0)
+        saved_row = conn.execute(
+            """
+            SELECT *
+            FROM favorite_meals
+            WHERE person_name = ? AND name = ?
+            """,
+            (payload["person_name"], payload["name"]),
+        ).fetchone()
+
+    backend, warning = _meal_write_backend()
+    if backend != "supabase":
+        return "sqlite", warning
+
+    try:
+        sync_payload = _row_to_dict(saved_row) or {**payload, "id": favorite_id}
+        SupabaseWriteAdapter(require_env=True, dry_run=False).save_favorite_meal(sync_payload)
+        return "supabase", warning
+    except Exception as exc:
+        return (
+            "sqlite",
+            "常用餐食已保存到 SQLite；Supabase favorite_meals write pilot 失敗："
+            f"{_readable_write_error(exc)}",
+        )
+
+
+def delete_favorite_meal(favorite_id: int, person_name: str) -> tuple[str, str | None]:
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT name FROM favorite_meals WHERE id = ? AND person_name = ?",
+            (favorite_id, person_name),
+        ).fetchone()
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM favorite_meals WHERE id = ? AND person_name = ?",
+            (favorite_id, person_name),
+        )
+    backend, warning = _meal_write_backend()
+    if backend != "supabase":
+        return "sqlite", warning
+
+    try:
+        favorite_name = existing["name"] if existing else None
+        SupabaseWriteAdapter(require_env=True, dry_run=False).delete_favorite_meal(
+            favorite_id,
+            person_name,
+            favorite_name,
+        )
+        return "supabase", warning
+    except Exception as exc:
+        return (
+            "sqlite",
+            "常用餐食已從 SQLite 刪除；Supabase favorite_meals delete pilot 失敗："
+            f"{_readable_write_error(exc)}",
+        )
 
 
 def save_meal_log(values: dict) -> tuple[str, str | None]:

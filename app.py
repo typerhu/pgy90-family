@@ -28,8 +28,11 @@ from runtime_config import get_backend_flag, supabase_config_status
 from meals import (
     coach_feedback,
     daily_meal_totals,
+    delete_favorite_meal,
     delete_meal_log,
+    list_favorite_meals,
     load_meals,
+    save_favorite_meal,
     save_meal_log,
     update_meal_log,
 )
@@ -65,7 +68,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260625-0711-R54"
+APP_VERSION = "Ver. PGY90-G1-260625-0740-R55"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -1053,6 +1056,31 @@ def init_db() -> None:
                 confidence TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS favorite_meals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_name TEXT NOT NULL,
+                name TEXT NOT NULL,
+                meal_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                calories INTEGER,
+                protein_g REAL,
+                fiber_g REAL,
+                carbs_g REAL,
+                fat_g REAL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (person_name, name)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_favorite_meals_person_name
+            ON favorite_meals (person_name, name)
             """
         )
         conn.execute(
@@ -3371,12 +3399,19 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
     prepare_local_date_input_state(coach_date_key)
     selected_date = st.date_input("記錄日期", key=coach_date_key)
     meal_write_status_key = f"meal_write_status_{person_name}_{selected_date.isoformat()}"
+    favorite_meal_status_key = f"favorite_meal_status_{person_name}_{selected_date.isoformat()}"
     meal_write_status = st.session_state.pop(meal_write_status_key, None)
     if meal_write_status:
         if meal_write_status.get("warning"):
             st.warning(meal_write_status["warning"])
         elif meal_write_status.get("backend") == "supabase":
             st.caption("Meal log write pilot: supabase")
+    favorite_meal_status = st.session_state.pop(favorite_meal_status_key, None)
+    if favorite_meal_status:
+        if favorite_meal_status.get("warning"):
+            st.warning(favorite_meal_status["warning"])
+        else:
+            st.caption("常用餐食已更新。")
     meals = load_meals(person_name)
     totals = daily_meal_totals(meals, selected_date)
     profile = get_coach_profile(person_name)
@@ -3441,6 +3476,72 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             "can_save": can_save,
         }
         st.session_state[unified_draft_version_key] = st.session_state.get(unified_draft_version_key, 0) + 1
+
+    favorite_meals, favorite_warning = list_favorite_meals(person_name)
+    if favorite_warning:
+        st.warning(favorite_warning)
+    with st.expander("從常用餐食套用", expanded=False):
+        if not favorite_meals:
+            st.caption("還沒有常用餐食。儲存餐食時可勾選「加入常用餐食」。")
+        else:
+            favorite_options = {
+                int(meal["id"]): meal
+                for meal in favorite_meals
+                if meal.get("id") is not None
+            }
+            if not favorite_options:
+                st.caption("目前沒有可套用的常用餐食。")
+            else:
+                selected_favorite_id = st.selectbox(
+                    "選擇常用餐食",
+                    list(favorite_options.keys()),
+                    format_func=lambda meal_id: (
+                        f"{favorite_options[meal_id].get('name', '未命名')}｜"
+                        f"{favorite_options[meal_id].get('meal_type', '餐食')}｜"
+                        f"{int(favorite_options[meal_id].get('calories') or 0)} kcal"
+                    ),
+                    key=f"favorite_meal_select_{person_name}",
+                )
+                selected_favorite = favorite_options.get(int(selected_favorite_id))
+                apply_col, delete_col = st.columns(2)
+                with apply_col:
+                    if st.button("套用這筆", use_container_width=True, key=f"apply_favorite_meal_{person_name}"):
+                        set_meal_draft(
+                            {
+                                "meal_type": selected_favorite.get("meal_type") or "點心",
+                                "description": selected_favorite.get("description") or "",
+                                "calories": selected_favorite.get("calories") or 0,
+                                "protein_g": selected_favorite.get("protein_g") or 0,
+                                "fiber_g": selected_favorite.get("fiber_g") or 0,
+                                "carbs_g": selected_favorite.get("carbs_g") or 0,
+                                "fat_g": selected_favorite.get("fat_g") or 0,
+                                "confidence": "常用餐食",
+                                "matched": selected_favorite.get("name") or "常用餐食",
+                            },
+                            "常用餐食",
+                        )
+                        st.success("已套用常用餐食，請確認後再儲存。")
+                        st.rerun()
+                with delete_col:
+                    confirm_delete_favorite = st.checkbox(
+                        "確認刪除",
+                        key=f"confirm_delete_favorite_meal_{person_name}_{selected_favorite_id}",
+                    )
+                    if st.button(
+                        "刪除這筆",
+                        use_container_width=True,
+                        disabled=not confirm_delete_favorite,
+                        key=f"delete_favorite_meal_{person_name}_{selected_favorite_id}",
+                    ):
+                        favorite_backend, favorite_delete_warning = delete_favorite_meal(
+                            int(selected_favorite_id),
+                            person_name,
+                        )
+                        st.session_state[favorite_meal_status_key] = {
+                            "backend": favorite_backend,
+                            "warning": favorite_delete_warning,
+                        }
+                        st.rerun()
 
     purpose = st.radio(
         "這次要做什麼？",
@@ -3739,6 +3840,17 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
             confirmed_fiber = st.number_input("纖維 g", min_value=0.0, max_value=100.0, value=float(draft["fiber_g"]), step=0.5, key=f"confirm_fiber_{person_name}_{suffix}")
             confirmed_carbs = st.number_input("碳水 g", min_value=0.0, max_value=500.0, value=float(draft["carbs_g"]), step=0.5, key=f"confirm_carbs_{person_name}_{suffix}")
             confirmed_fat = st.number_input("脂肪 g", min_value=0.0, max_value=300.0, value=float(draft["fat_g"]), step=0.5, key=f"confirm_fat_{person_name}_{suffix}")
+            add_to_favorites = st.checkbox(
+                "加入常用餐食",
+                key=f"confirm_add_favorite_{person_name}_{suffix}",
+            )
+            default_favorite_name = str(draft["description"]).strip()[:30] or "常用餐食"
+            favorite_name = st.text_input(
+                "常用餐食名稱",
+                value=default_favorite_name,
+                key=f"confirm_favorite_name_{person_name}_{suffix}",
+                help="若勾選加入常用餐食，會用這個名稱保存；同名會更新成這次的數據。",
+            )
             save_draft = st.form_submit_button(
                 "儲存這餐",
                 use_container_width=True,
@@ -3771,6 +3883,24 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                     "backend": meal_write_backend,
                     "warning": meal_write_warning,
                 }
+                if add_to_favorites:
+                    favorite_backend, favorite_warning = save_favorite_meal(
+                        {
+                            "person_name": person_name,
+                            "name": favorite_name.strip() or cleaned_description[:30] or "常用餐食",
+                            "meal_type": confirmed_meal_type,
+                            "description": cleaned_description,
+                            "calories": confirmed_calories,
+                            "protein_g": confirmed_protein,
+                            "fiber_g": confirmed_fiber,
+                            "carbs_g": confirmed_carbs,
+                            "fat_g": confirmed_fat,
+                        }
+                    )
+                    st.session_state[favorite_meal_status_key] = {
+                        "backend": favorite_backend,
+                        "warning": favorite_warning,
+                    }
                 if estimate_for_notes:
                     estimate_for_notes.update(
                         {

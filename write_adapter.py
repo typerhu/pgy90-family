@@ -69,6 +69,20 @@ MEAL_LOG_COLUMNS = {
     "confidence",
     "created_at",
 }
+FAVORITE_MEAL_COLUMNS = {
+    "id",
+    "person_name",
+    "name",
+    "meal_type",
+    "description",
+    "calories",
+    "protein_g",
+    "fiber_g",
+    "carbs_g",
+    "fat_g",
+    "created_at",
+    "updated_at",
+}
 
 
 @dataclass(frozen=True)
@@ -102,6 +116,15 @@ class WriteAdapter(Protocol):
     def update_meal_log(self, meal_id: int, values: dict[str, Any]) -> WriteResult: ...
 
     def delete_meal_log(self, meal_id: int, person_name: str | None = None) -> WriteResult: ...
+
+    def save_favorite_meal(self, values: dict[str, Any]) -> WriteResult: ...
+
+    def delete_favorite_meal(
+        self,
+        favorite_id: int,
+        person_name: str,
+        name: str | None = None,
+    ) -> WriteResult: ...
 
     def save_coach_profile(self, person_name: str, values: dict[str, Any]) -> WriteResult: ...
 
@@ -186,6 +209,23 @@ def build_meal_log_payload(values: dict[str, Any]) -> dict[str, Any]:
     payload["description"] = _required_text(payload.get("description"), "description")
     payload["confidence"] = _required_text(payload.get("confidence"), "confidence")
     payload["created_at"] = payload.get("created_at") or datetime.now().isoformat(timespec="seconds")
+    if payload.get("id") is not None:
+        payload["id"] = int(payload["id"])
+    return payload
+
+
+def build_favorite_meal_payload(values: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: _blank_to_none(_json_safe_value(value))
+        for key, value in dict(values).items()
+        if key in FAVORITE_MEAL_COLUMNS
+    }
+    payload["person_name"] = _required_text(payload.get("person_name"), "person_name")
+    payload["name"] = _required_text(payload.get("name"), "name")
+    payload["meal_type"] = _required_text(payload.get("meal_type"), "meal_type")
+    payload["description"] = _required_text(payload.get("description"), "description")
+    payload["created_at"] = payload.get("created_at") or datetime.now().isoformat(timespec="seconds")
+    payload["updated_at"] = payload.get("updated_at") or payload["created_at"]
     if payload.get("id") is not None:
         payload["id"] = int(payload["id"])
     return payload
@@ -278,6 +318,34 @@ class DryRunWriteAdapter:
             table="meal_logs",
             key=key,
             message="Skeleton only. Future implementation must confirm delete safety.",
+        )
+
+    def save_favorite_meal(self, values: dict[str, Any]) -> WriteResult:
+        payload = build_favorite_meal_payload(values)
+        return self._result(
+            operation="save_favorite_meal",
+            table="favorite_meals",
+            key={"person_name": payload["person_name"], "name": payload["name"]},
+            payload=payload,
+            message="Validated only. No favorite meal was written.",
+        )
+
+    def delete_favorite_meal(
+        self,
+        favorite_id: int,
+        person_name: str,
+        name: str | None = None,
+    ) -> WriteResult:
+        if int(favorite_id) <= 0:
+            raise ValueError("favorite_id must be positive.")
+        key = {"id": int(favorite_id), "person_name": person_name}
+        if name:
+            key["name"] = name
+        return self._result(
+            operation="delete_favorite_meal",
+            table="favorite_meals",
+            key=key,
+            message="Validated only. No favorite meal was deleted.",
         )
 
     def save_coach_profile(self, person_name: str, values: dict[str, Any]) -> WriteResult:
@@ -532,6 +600,87 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
             dry_run=False,
             would_write=True,
             message="Supabase meal_logs delete completed.",
+        )
+
+    def list_favorite_meals(self, person_name: str) -> list[dict[str, Any]]:
+        cleaned_person = _required_text(person_name, "person_name")
+        if self.dry_run:
+            return []
+        client = self._get_client()
+        response = (
+            client.table("favorite_meals")
+            .select("*")
+            .eq("person_name", cleaned_person)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        return [dict(row) for row in (response.data or [])]
+
+    def save_favorite_meal(self, values: dict[str, Any]) -> WriteResult:
+        payload = build_favorite_meal_payload(values)
+        key = {"person_name": payload["person_name"], "name": payload["name"]}
+        if self.dry_run:
+            return self._result(
+                operation="save_favorite_meal",
+                table="favorite_meals",
+                key=key,
+                payload=payload,
+            )
+
+        supabase_payload = dict(payload)
+        supabase_payload.pop("id", None)
+        client = self._get_client()
+        client.table("favorite_meals").upsert(
+            supabase_payload,
+            on_conflict="person_name,name",
+        ).execute()
+        return WriteResult(
+            backend=self.backend_name,
+            operation="save_favorite_meal",
+            table="favorite_meals",
+            key=key,
+            payload=supabase_payload,
+            dry_run=False,
+            would_write=True,
+            message="Supabase favorite_meals upsert completed.",
+        )
+
+    def delete_favorite_meal(
+        self,
+        favorite_id: int,
+        person_name: str,
+        name: str | None = None,
+    ) -> WriteResult:
+        if int(favorite_id) <= 0:
+            raise ValueError("favorite_id must be positive.")
+        cleaned_person = _required_text(person_name, "person_name")
+        key = {"id": int(favorite_id), "person_name": cleaned_person}
+        if name:
+            key["name"] = name
+        if self.dry_run:
+            return self._result(
+                operation="delete_favorite_meal",
+                table="favorite_meals",
+                key=key,
+                message="Validated only. No favorite meal was deleted.",
+            )
+
+        client = self._get_client()
+        query = client.table("favorite_meals").delete().eq("person_name", cleaned_person)
+        if name:
+            query = query.eq("name", str(name))
+        else:
+            query = query.eq("id", int(favorite_id))
+        query.execute()
+        return WriteResult(
+            backend=self.backend_name,
+            operation="delete_favorite_meal",
+            table="favorite_meals",
+            key=key,
+            payload={},
+            dry_run=False,
+            would_write=True,
+            message="Supabase favorite_meals delete completed.",
         )
 
 

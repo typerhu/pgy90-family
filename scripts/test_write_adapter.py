@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
 from write_adapter import (
     SupabaseWriteAdapter,
     build_daily_log_payload,
+    build_favorite_meal_payload,
     build_meal_log_payload,
     build_weekly_report_payload,
     get_write_adapter,
@@ -137,6 +138,34 @@ def main() -> int:
         for result in [meal_save_result, meal_update_result, meal_delete_result, chinese_meal_result]
     ):
         print("ERROR: Supabase meal_logs adapter did not return dry-run results.", file=sys.stderr)
+        return 1
+
+    favorite_payload = build_favorite_meal_payload(
+        {
+            "id": 456,
+            "person_name": "TYP",
+            "name": "常用彩椒雞蛋",
+            "meal_type": "午餐",
+            "description": "彩椒雞蛋番茄什錦",
+            "calories": 345,
+            "protein_g": 22.5,
+            "fiber_g": 6.0,
+            "carbs_g": 28.0,
+            "fat_g": 12.0,
+            "created_at": "2026-06-25T08:00:00",
+            "updated_at": "2026-06-25T08:00:00",
+        }
+    )
+    favorite_save_result = supabase_adapter.save_favorite_meal(favorite_payload)
+    favorite_delete_result = supabase_adapter.delete_favorite_meal(int(favorite_payload["id"]), "TYP")
+    print(f"- favorite meal payload fields: {sorted(favorite_payload.keys())}")
+    print(f"- supabase favorite_meals save dry-run: {scrub_result(favorite_save_result)}")
+    print(f"- supabase favorite_meals delete dry-run: {scrub_result(favorite_delete_result)}")
+    if not all(
+        result.dry_run and result.would_write
+        for result in [favorite_save_result, favorite_delete_result]
+    ):
+        print("ERROR: Supabase favorite_meals adapter did not return dry-run results.", file=sys.stderr)
         return 1
 
     if has_supabase_env():
