@@ -65,7 +65,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-2218-R52"
+APP_VERSION = "Ver. PGY90-G1-260625-0711-R54"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -327,13 +327,32 @@ def parse_remember_token(token: str) -> tuple[str, bool] | None:
 
 
 def remember_user_exists(person_name: str, is_admin: bool) -> bool:
+    person_name = str(person_name or "").strip()
+    if not person_name or is_reserved_secret_name(person_name):
+        return False
     if is_admin:
         return person_name in get_admin_passwords()
-    return (
-        person_name in registered_usernames()
-        or person_name in get_user_passwords()
-        or bool(get_app_password())
+
+    sqlite_users = registered_usernames()
+    secret_users = list(get_user_passwords().keys())
+    if person_name in clean_login_usernames([*sqlite_users, *secret_users]):
+        return True
+    if get_app_password() and person_name == DEFAULT_PERSON:
+        return True
+
+    available_users, _ = login_user_options(
+        sqlite_users,
+        secret_users,
+        [],
     )
+    return person_name in available_users
+
+
+def set_authenticated_session(person_name: str, is_admin: bool) -> None:
+    st.session_state["authenticated"] = True
+    st.session_state["authenticated_person"] = person_name
+    st.session_state["is_admin"] = is_admin
+    st.session_state.pop(REMEMBER_DISABLED_KEY, None)
 
 
 def get_cookie_manager():
@@ -356,13 +375,14 @@ def apply_remembered_login() -> None:
     token = get_remember_cookie()
     remembered = parse_remember_token(token)
     if remembered is None:
+        if token:
+            clear_remember_cookie()
         return
     person_name, is_admin = remembered
     if not remember_user_exists(person_name, is_admin):
+        clear_remember_cookie()
         return
-    st.session_state["authenticated"] = True
-    st.session_state["authenticated_person"] = person_name
-    st.session_state["is_admin"] = is_admin
+    set_authenticated_session(person_name, is_admin)
 
 
 def set_remember_cookie(token: str) -> None:
@@ -387,11 +407,12 @@ def request_logout() -> None:
 
 
 def finish_login(person_name: str | None, is_admin: bool, remember_me: bool) -> None:
-    st.session_state["authenticated"] = True
-    st.session_state["is_admin"] = is_admin
-    st.session_state.pop(REMEMBER_DISABLED_KEY, None)
     if person_name:
-        st.session_state["authenticated_person"] = person_name
+        set_authenticated_session(person_name, is_admin)
+    else:
+        st.session_state["authenticated"] = True
+        st.session_state["is_admin"] = is_admin
+        st.session_state.pop(REMEMBER_DISABLED_KEY, None)
     if remember_me and person_name:
         st.session_state["remember_token_to_set"] = make_remember_token(person_name, is_admin)
     st.rerun()
