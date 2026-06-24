@@ -65,7 +65,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-1854-R47"
+APP_VERSION = "Ver. PGY90-G1-260624-1911-R48"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -78,6 +78,7 @@ WEEKLY_REPORT_WRITE_BACKEND_ENV = "PGY90_WEEKLY_REPORT_WRITE_BACKEND"
 DAILY_LOG_WRITE_BACKEND_ENV = "PGY90_DAILY_LOG_WRITE_BACKEND"
 TREND_READ_BACKEND_ENV = "PGY90_TREND_READ_BACKEND"
 HOME_READ_BACKEND_ENV = "PGY90_HOME_READ_BACKEND"
+LOGIN_USER_LIST_BACKEND_ENV = "PGY90_LOGIN_USER_LIST_BACKEND"
 
 
 def get_local_today() -> date:
@@ -530,6 +531,73 @@ def registered_usernames() -> list[str]:
     return [row["person_name"] for row in rows]
 
 
+def clean_login_usernames(names: list[str] | set[str]) -> list[str]:
+    return sorted(
+        {
+            str(name).strip()
+            for name in names
+            if str(name).strip() and not is_reserved_secret_name(str(name))
+        }
+    )
+
+
+def get_login_user_list_backend() -> tuple[str, str | None]:
+    backend = get_backend_flag(LOGIN_USER_LIST_BACKEND_ENV)
+    if backend in {"sqlite", "supabase_fallback", "supabase"}:
+        return backend, None
+    return "sqlite", f"{LOGIN_USER_LIST_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def supabase_login_usernames() -> list[str]:
+    adapter = get_db_adapter("supabase")
+    names = {
+        str(row.get("person_name") or "").strip()
+        for row in adapter.list_people()
+    }
+    names.update(
+        str(row.get("person_name") or "").strip()
+        for row in adapter.get_app_users()
+    )
+    return clean_login_usernames(names)
+
+
+def login_user_options(
+    sqlite_users: list[str] | None = None,
+    secret_users: list[str] | None = None,
+    admin_users: list[str] | None = None,
+) -> tuple[list[str], dict[str, object]]:
+    backend, warning = get_login_user_list_backend()
+    sqlite_names = clean_login_usernames(sqlite_users or registered_usernames())
+    secret_names = clean_login_usernames(secret_users or [])
+    admin_names = clean_login_usernames(admin_users or [])
+    supabase_names: list[str] = []
+    errors: list[str] = []
+
+    if backend in {"supabase_fallback", "supabase"}:
+        try:
+            supabase_names = clean_login_usernames(supabase_login_usernames())
+        except Exception as exc:
+            errors.append(readable_backend_error(exc))
+
+    if backend == "supabase":
+        base_names = supabase_names or sqlite_names
+    else:
+        base_names = list(sqlite_names)
+        if backend == "supabase_fallback":
+            base_names.extend(supabase_names)
+
+    merged = clean_login_usernames([*base_names, *secret_names, *admin_names])
+    meta = {
+        "backend": backend,
+        "warning": warning,
+        "errors": errors,
+        "sqlite_users": sqlite_names,
+        "supabase_users": supabase_names,
+        "merged_users": merged,
+    }
+    return merged, meta
+
+
 def verify_account(person_name: str, password: str) -> bool:
     with connect() as conn:
         row = conn.execute(
@@ -547,9 +615,14 @@ def require_login() -> str | None:
     admin_passwords = get_admin_passwords()
     user_passwords = get_user_passwords()
     registered_users = registered_usernames()
+    available_users, _ = login_user_options(
+        registered_users,
+        list(user_passwords.keys()),
+        list(admin_passwords.keys()),
+    )
     password = get_app_password()
     invite_code = get_invite_code()
-    if not registered_users and not user_passwords and not admin_passwords and not password and not invite_code:
+    if not available_users and not password and not invite_code:
         st.error("尚未設定登入方式。請先在 Streamlit Secrets 加上 INVITE_CODE 或 [admins]。")
         st.stop()
 
@@ -580,9 +653,6 @@ def require_login() -> str | None:
 
     with login_tab:
         with st.form("login_form"):
-            available_users = sorted(
-                set(registered_users) | set(user_passwords.keys()) | set(admin_passwords.keys())
-            )
             selected_user = None
             if available_users:
                 selected_user = st.selectbox("使用者", available_users)
@@ -3943,6 +4013,42 @@ def render_streamlit_cloud_supabase_dry_run() -> None:
     ]
     st.markdown("##### Backend flags")
     st.dataframe(pd.DataFrame(flag_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("##### Login user list source preview")
+    login_backend, login_backend_warning = get_login_user_list_backend()
+    sqlite_login_users = clean_login_usernames(registered_usernames())
+    secret_login_users = clean_login_usernames(list(get_user_passwords().keys()))
+    admin_login_users = clean_login_usernames(list(get_admin_passwords().keys()))
+    supabase_login_users: list[str] = []
+    supabase_login_error = ""
+    if url_present and key_present:
+        try:
+            supabase_login_users = supabase_login_usernames()
+        except Exception as exc:
+            supabase_login_error = readable_backend_error(exc)
+
+    if login_backend == "supabase":
+        source_names = supabase_login_users or sqlite_login_users
+    elif login_backend == "supabase_fallback":
+        source_names = [*sqlite_login_users, *supabase_login_users]
+    else:
+        source_names = list(sqlite_login_users)
+    merged_login_users = clean_login_usernames(
+        [*source_names, *secret_login_users, *admin_login_users]
+    )
+
+    preview_rows = [
+        {"source": "backend flag", "count": "", "users": login_backend},
+        {"source": "sqlite app_users", "count": len(sqlite_login_users), "users": ", ".join(sqlite_login_users) or "none"},
+        {"source": "supabase people/app_users", "count": len(supabase_login_users), "users": ", ".join(supabase_login_users) or "none"},
+        {"source": "merged login options", "count": len(merged_login_users), "users": ", ".join(merged_login_users) or "none"},
+    ]
+    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+    if login_backend_warning:
+        st.warning(login_backend_warning)
+    if supabase_login_error:
+        st.warning(f"Supabase login user preview failed：{supabase_login_error}")
+    st.caption("此 preview 只讀 person_name，不讀取或顯示 password_hash / secrets。")
 
     st.markdown("##### Read-only connection check")
     if not url_present or not key_present:
