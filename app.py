@@ -65,7 +65,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-1951-R49"
+APP_VERSION = "Ver. PGY90-G1-260624-2020-R50"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -4156,6 +4156,10 @@ def render_streamlit_cloud_supabase_dry_run() -> None:
         st.error(f"FAIL：Supabase read-only connection failed：{readable_backend_error(exc)}")
 
     st.caption("此 dry run 只讀取 Supabase counts，不會 insert / update / delete。")
+    st.caption(
+        "Post-cutover safety check：可在本機執行 "
+        "`python3 scripts/post_cutover_safety_check.py` 監控 Supabase counts、duplicates 與 orphan references。"
+    )
 
 
 def admin_panel() -> str | None:
