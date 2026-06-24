@@ -15,6 +15,42 @@ from typing import Any, Protocol
 
 WRITE_BACKEND_ENV = "PGY90_WRITE_BACKEND"
 SUPPORTED_WRITE_BACKENDS = {"sqlite", "supabase"}
+DAILY_LOG_COLUMNS = {
+    "person_name",
+    "log_date",
+    "weight_kg",
+    "body_fat_percent",
+    "waist_cm",
+    "sleep_hours",
+    "sleep_quality",
+    "food_category",
+    "food_notes",
+    "breakfast_category",
+    "breakfast_notes",
+    "lunch_category",
+    "lunch_notes",
+    "dinner_category",
+    "dinner_notes",
+    "snack_notes",
+    "workout_type",
+    "workout_minutes",
+    "avg_heart_rate",
+    "max_heart_rate",
+    "active_calories",
+    "distance_km",
+    "rpe",
+    "discomfort_notes",
+    "workout_notes",
+    "rehab_done",
+    "rehab_type",
+    "rehab_notes",
+    "notes",
+    "created_at",
+    "updated_at",
+    "systolic_bp",
+    "diastolic_bp",
+    "pulse_bpm",
+}
 
 
 @dataclass(frozen=True)
@@ -75,6 +111,43 @@ def build_weekly_report_payload(
     }
 
 
+def _blank_to_none(value: Any) -> Any:
+    if value == "":
+        return None
+    return value
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    cleaned = str(value).strip().lower()
+    if cleaned in {"1", "true", "yes", "y"}:
+        return True
+    if cleaned in {"0", "false", "no", "n"}:
+        return False
+    return bool(value)
+
+
+def build_daily_log_payload(values: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = {
+        key: _blank_to_none(value)
+        for key, value in dict(values).items()
+        if key in DAILY_LOG_COLUMNS
+    }
+    payload["person_name"] = _required_text(payload.get("person_name"), "person_name")
+    payload["log_date"] = _required_text(payload.get("log_date"), "log_date")
+    payload["updated_at"] = payload.get("updated_at") or now
+    payload["created_at"] = payload.get("created_at") or payload["updated_at"]
+    if "rehab_done" in payload:
+        payload["rehab_done"] = _bool_or_none(payload.get("rehab_done"))
+    return payload
+
+
 class DryRunWriteAdapter:
     backend_name = "dry-run"
 
@@ -120,13 +193,12 @@ class DryRunWriteAdapter:
         )
 
     def upsert_daily_log(self, values: dict[str, Any]) -> WriteResult:
-        person_name = _required_text(values.get("person_name"), "person_name")
-        log_date = _required_text(values.get("log_date"), "log_date")
+        payload = build_daily_log_payload(values)
         return self._result(
             operation="upsert_daily_log",
             table="daily_logs",
-            key={"person_name": person_name, "log_date": log_date},
-            payload=dict(values),
+            key={"person_name": payload["person_name"], "log_date": payload["log_date"]},
+            payload=payload,
             message="Skeleton only. Future implementation must define upsert semantics.",
         )
 
@@ -190,8 +262,8 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
     """Supabase write adapter.
 
     By default this class remains dry-run for smoke tests. Passing dry_run=False
-    enables the weekly_reports-only write pilot. Other write methods still use
-    the inherited skeleton behavior.
+    enables the weekly_reports and daily_logs pilot paths. Other write methods
+    still use the inherited skeleton behavior.
     """
 
     backend_name = "supabase"
@@ -256,6 +328,33 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
             dry_run=False,
             would_write=True,
             message="Supabase weekly_reports upsert completed.",
+        )
+
+    def upsert_daily_log(self, values: dict[str, Any]) -> WriteResult:
+        payload = build_daily_log_payload(values)
+        key = {"person_name": payload["person_name"], "log_date": payload["log_date"]}
+        if self.dry_run:
+            return self._result(
+                operation="upsert_daily_log",
+                table="daily_logs",
+                key=key,
+                payload=payload,
+            )
+
+        client = self._get_client()
+        client.table("daily_logs").upsert(
+            payload,
+            on_conflict="person_name,log_date",
+        ).execute()
+        return WriteResult(
+            backend=self.backend_name,
+            operation="upsert_daily_log",
+            table="daily_logs",
+            key=key,
+            payload=payload,
+            dry_run=False,
+            would_write=True,
+            message="Supabase daily_logs upsert completed.",
         )
 
 

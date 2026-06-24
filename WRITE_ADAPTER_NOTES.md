@@ -86,3 +86,19 @@ The following remain out of scope:
 - `meal_logs` CRUD
 - `coach_profiles` writes
 - auth / admin writes
+
+## R43 Daily Logs Save Pilot
+
+R43 enables one additional app write pilot for `daily_logs` only.
+
+- Default behavior remains SQLite.
+- `PGY90_DAILY_LOG_WRITE_BACKEND=sqlite` keeps the original SQLite save path.
+- `PGY90_DAILY_LOG_WRITE_BACKEND=supabase` first saves to SQLite, then reads back
+  the saved row and attempts a Supabase `daily_logs` upsert by
+  `person_name + log_date`.
+- Supabase failures are shown as warnings and do not block the SQLite save.
+- No meal, auth, coach profile, or admin write path uses the Supabase write
+  adapter.
+
+The Supabase daily log payload is restricted to known `daily_logs` columns and
+converts `rehab_done` to a boolean-compatible value.

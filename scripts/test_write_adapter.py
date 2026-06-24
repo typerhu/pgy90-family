@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from write_adapter import (
     SupabaseWriteAdapter,
+    build_daily_log_payload,
     build_weekly_report_payload,
     get_write_adapter,
 )
@@ -60,6 +61,23 @@ def main() -> int:
     print(f"- supabase dry-run: {scrub_result(supabase_result)}")
     if not supabase_result.dry_run or not supabase_result.would_write:
         print("ERROR: Supabase adapter did not return dry-run result.", file=sys.stderr)
+        return 1
+
+    daily_payload = build_daily_log_payload(
+        {
+            "person_name": "TYP",
+            "log_date": "2026-06-24",
+            "weight_kg": 82.1,
+            "sleep_hours": 6.5,
+            "rehab_done": 1,
+            "ignored_field": "not exported",
+        }
+    )
+    print(f"- daily log payload fields: {sorted(daily_payload.keys())}")
+    daily_result = supabase_adapter.upsert_daily_log(daily_payload)
+    print(f"- supabase daily_logs dry-run: {scrub_result(daily_result)}")
+    if not daily_result.dry_run or not daily_result.would_write:
+        print("ERROR: Supabase daily_logs adapter did not return dry-run result.", file=sys.stderr)
         return 1
 
     if has_supabase_env():

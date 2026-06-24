@@ -63,7 +63,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-1325-R42"
+APP_VERSION = "Ver. PGY90-G1-260624-1340-R43"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -73,6 +73,7 @@ REMEMBER_CLEAR_PENDING_KEY = "remember_cookie_clear_pending"
 REGISTRATION_SUCCESS_KEY = "registration_success_message"
 WEEKLY_REPORT_READ_BACKEND_ENV = "PGY90_WEEKLY_REPORT_READ_BACKEND"
 WEEKLY_REPORT_WRITE_BACKEND_ENV = "PGY90_WEEKLY_REPORT_WRITE_BACKEND"
+DAILY_LOG_WRITE_BACKEND_ENV = "PGY90_DAILY_LOG_WRITE_BACKEND"
 TREND_READ_BACKEND_ENV = "PGY90_TREND_READ_BACKEND"
 HOME_READ_BACKEND_ENV = "PGY90_HOME_READ_BACKEND"
 
@@ -965,7 +966,14 @@ def get_daily_log(person_name: str, log_date: date) -> sqlite3.Row | None:
         ).fetchone()
 
 
-def upsert_daily_log(values: dict) -> None:
+def get_daily_log_write_backend() -> tuple[str, str | None]:
+    backend = os.environ.get(DAILY_LOG_WRITE_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    if backend in {"sqlite", "supabase"}:
+        return backend, None
+    return "sqlite", f"{DAILY_LOG_WRITE_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def upsert_daily_log(values: dict) -> tuple[str, str | None]:
     now = datetime.now().isoformat(timespec="seconds")
     payload = {
         **values,
@@ -1045,6 +1053,21 @@ def upsert_daily_log(values: dict) -> None:
                 """,
                 {**payload, "created_at": now},
             )
+    backend, warning = get_daily_log_write_backend()
+    if backend != "supabase":
+        return "sqlite", warning
+
+    try:
+        saved_row = get_daily_log(payload["person_name"], date.fromisoformat(payload["log_date"]))
+        supabase_payload = dict(saved_row) if saved_row else {**payload, "created_at": now}
+        SupabaseWriteAdapter(require_env=True, dry_run=False).upsert_daily_log(supabase_payload)
+        return "supabase", warning
+    except Exception as exc:
+        return (
+            "sqlite",
+            "每日健康記錄已保存到 SQLite；Supabase daily_logs write pilot 失敗，未影響本機保存："
+            f"{readable_backend_error(exc)}",
+        )
 
 
 def load_logs(person_name: str) -> pd.DataFrame:
@@ -2520,6 +2543,14 @@ def daily_input_page(person_name: str) -> None:
     local_today = prepare_local_date_input_state(daily_date_key)
     selected_date = st.date_input("日期", key=daily_date_key)
     st.caption(f"本地日期：{local_today.strftime('%Y/%m/%d')}（Asia/Kuala_Lumpur）")
+    daily_save_status_key = f"daily_save_status_{person_name}_{selected_date.isoformat()}"
+    save_status = st.session_state.pop(daily_save_status_key, None)
+    if save_status:
+        st.success("已儲存。")
+        if save_status.get("warning"):
+            st.warning(save_status["warning"])
+        elif save_status.get("backend") == "supabase":
+            st.caption("Daily log write pilot: supabase")
     existing = get_daily_log(person_name, selected_date)
     coach_profile = get_coach_profile(person_name)
     health_limitations = coach_profile["health_limitations"] if coach_profile else ""
@@ -2824,7 +2855,7 @@ def daily_input_page(person_name: str) -> None:
         submitted = st.form_submit_button("儲存今日紀錄", use_container_width=True)
 
     if submitted:
-        upsert_daily_log(
+        daily_write_backend, daily_write_warning = upsert_daily_log(
             {
                 "person_name": person_name,
                 "log_date": selected_date.isoformat(),
@@ -2862,7 +2893,10 @@ def daily_input_page(person_name: str) -> None:
                 "notes": notes.strip(),
             }
         )
-        st.success("已儲存。")
+        st.session_state[daily_save_status_key] = {
+            "backend": daily_write_backend,
+            "warning": daily_write_warning,
+        }
         st.rerun()
 
 
