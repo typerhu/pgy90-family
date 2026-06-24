@@ -10,6 +10,7 @@ import re
 import sqlite3
 import secrets
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -64,7 +65,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-1838-R46"
+APP_VERSION = "Ver. PGY90-G1-260624-1854-R47"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -186,7 +187,10 @@ RESERVED_SECRET_NAMES = {
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
     "REMEMBER_LOGIN_SECRET",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_URL",
 }
+RESERVED_SECRET_PREFIXES = ("PGY90_", "SUPABASE_", "OPENAI_")
 
 DAILY_LOG_MIGRATIONS = {
     "systolic_bp": "INTEGER",
@@ -236,32 +240,31 @@ def get_invite_code() -> str:
     return os.environ.get("INVITE_CODE", "")
 
 
-def get_user_passwords() -> dict[str, str]:
+def is_reserved_secret_name(name: str) -> bool:
+    normalized = str(name).strip()
+    return normalized in RESERVED_SECRET_NAMES or normalized.startswith(RESERVED_SECRET_PREFIXES)
+
+
+def get_secret_mapping(section_name: str) -> dict[str, str]:
     try:
-        users = st.secrets.get("users", {})
+        section = st.secrets[section_name]
     except Exception:
-        users = {}
-    if not users:
+        return {}
+    if not isinstance(section, Mapping):
         return {}
     return {
         str(username): str(password)
-        for username, password in dict(users).items()
-        if str(username) not in RESERVED_SECRET_NAMES
+        for username, password in section.items()
+        if username and password and not is_reserved_secret_name(str(username))
     }
+
+
+def get_user_passwords() -> dict[str, str]:
+    return get_secret_mapping("users")
 
 
 def get_admin_passwords() -> dict[str, str]:
-    try:
-        admins = st.secrets.get("admins", {})
-    except Exception:
-        admins = {}
-    if not admins:
-        return {}
-    return {
-        str(username): str(password)
-        for username, password in dict(admins).items()
-        if str(username) not in RESERVED_SECRET_NAMES
-    }
+    return get_secret_mapping("admins")
 
 
 def get_remember_login_secret() -> str:
