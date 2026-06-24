@@ -6,11 +6,11 @@ This module is not wired into app.py yet; it is a migration preparation layer.
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from typing import Any, Protocol
 
 from db import DB_PATH
+from runtime_config import get_backend_flag, get_supabase_service_role_key, get_supabase_url
 
 
 CORE_TABLES = [
@@ -112,8 +112,8 @@ class SupabaseAdapter:
         supabase_url: str | None = None,
         service_role_key: str | None = None,
     ) -> None:
-        self.supabase_url = supabase_url or os.environ.get("SUPABASE_URL")
-        self.service_role_key = service_role_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        self.supabase_url = supabase_url or get_supabase_url()
+        self.service_role_key = service_role_key or get_supabase_service_role_key()
 
         missing = []
         if not self.supabase_url:
@@ -178,7 +178,7 @@ class SupabaseAdapter:
 
 
 def get_db_backend_name() -> str:
-    return os.environ.get("PGY90_DB_BACKEND", "sqlite").strip().lower() or "sqlite"
+    return get_backend_flag("PGY90_DB_BACKEND")
 
 
 def get_db_adapter(backend: str | None = None) -> DBAdapter:

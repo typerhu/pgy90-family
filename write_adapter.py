@@ -7,7 +7,6 @@ weekly_reports pilot path introduced after the isolated R41 test.
 
 from __future__ import annotations
 
-import os
 import json
 import urllib.error
 import urllib.parse
@@ -15,6 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
+from runtime_config import get_backend_flag, get_supabase_service_role_key, get_supabase_url
 
 
 WRITE_BACKEND_ENV = "PGY90_WRITE_BACKEND"
@@ -312,8 +312,8 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
     backend_name = "supabase"
 
     def __init__(self, require_env: bool = False, dry_run: bool = True) -> None:
-        self.supabase_url = os.environ.get("SUPABASE_URL")
-        self.service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        self.supabase_url = get_supabase_url()
+        self.service_role_key = get_supabase_service_role_key()
         self.dry_run = dry_run
         if require_env and (not self.supabase_url or not self.service_role_key):
             raise RuntimeError(
@@ -536,7 +536,7 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
 
 
 def get_write_backend_name() -> str:
-    backend = os.environ.get(WRITE_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    backend = get_backend_flag(WRITE_BACKEND_ENV)
     if backend in SUPPORTED_WRITE_BACKENDS:
         return backend
     raise ValueError(f"Unsupported {WRITE_BACKEND_ENV}: {backend}")

@@ -23,6 +23,7 @@ from dashboard_read_models import get_person_daily_logs, get_person_meal_logs, g
 from db_adapter import CORE_TABLES, get_db_adapter, get_db_backend_name
 from db_sync_status import get_sqlite_supabase_sync_status
 from db import DB_PATH, DATA_DIR, connect, table_columns
+from runtime_config import get_backend_flag, supabase_config_status
 from meals import (
     coach_feedback,
     daily_meal_totals,
@@ -63,7 +64,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-1831-R45"
+APP_VERSION = "Ver. PGY90-G1-260624-1838-R46"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -967,7 +968,7 @@ def get_daily_log(person_name: str, log_date: date) -> sqlite3.Row | None:
 
 
 def get_daily_log_write_backend() -> tuple[str, str | None]:
-    backend = os.environ.get(DAILY_LOG_WRITE_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    backend = get_backend_flag(DAILY_LOG_WRITE_BACKEND_ENV)
     if backend in {"sqlite", "supabase"}:
         return backend, None
     return "sqlite", f"{DAILY_LOG_WRITE_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
@@ -2145,7 +2146,7 @@ def render_weekly_compact_summary(
 
 
 def get_weekly_report_write_backend() -> tuple[str, str | None]:
-    backend = os.environ.get(WEEKLY_REPORT_WRITE_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    backend = get_backend_flag(WEEKLY_REPORT_WRITE_BACKEND_ENV)
     if backend in {"sqlite", "supabase"}:
         return backend, None
     return "sqlite", f"{WEEKLY_REPORT_WRITE_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
@@ -2203,7 +2204,7 @@ def get_saved_report(person_name: str, window: WeekWindow) -> sqlite3.Row | None
 
 
 def get_weekly_report_read_backend() -> tuple[str, str | None]:
-    backend = os.environ.get(WEEKLY_REPORT_READ_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    backend = get_backend_flag(WEEKLY_REPORT_READ_BACKEND_ENV)
     if backend in {"sqlite", "supabase"}:
         return backend, None
     return "sqlite", f"{WEEKLY_REPORT_READ_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
@@ -2235,7 +2236,7 @@ def get_saved_report_for_display(
 
 
 def get_trend_read_backend() -> tuple[str, str | None]:
-    backend = os.environ.get(TREND_READ_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    backend = get_backend_flag(TREND_READ_BACKEND_ENV)
     if backend in {"sqlite", "supabase"}:
         return backend, None
     return "sqlite", f"{TREND_READ_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
@@ -2276,7 +2277,7 @@ def load_trend_logs_for_display(
 
 
 def get_home_read_backend() -> tuple[str, str | None]:
-    backend = os.environ.get(HOME_READ_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    backend = get_backend_flag(HOME_READ_BACKEND_ENV)
     if backend in {"sqlite", "supabase"}:
         return backend, None
     return "sqlite", f"{HOME_READ_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
@@ -3913,6 +3914,53 @@ def render_backend_readonly_pilot() -> None:
     st.caption("此區塊只讀取 row counts 與少量非敏感 sample，不會寫入 SQLite 或 Supabase。")
 
 
+def render_streamlit_cloud_supabase_dry_run() -> None:
+    st.markdown("#### Streamlit Cloud / Supabase dry run")
+    status = supabase_config_status()
+    url_present = bool(status["supabase_url_present"])
+    key_present = bool(status["supabase_service_role_key_present"])
+
+    config_rows = [
+        {
+            "item": "SUPABASE_URL",
+            "status": "present" if url_present else "missing",
+            "value": status["masked_supabase_url"] if url_present else "missing",
+        },
+        {
+            "item": "SUPABASE_SERVICE_ROLE_KEY",
+            "status": "present" if key_present else "missing",
+            "value": "hidden" if key_present else "missing",
+        },
+    ]
+    st.dataframe(pd.DataFrame(config_rows), use_container_width=True, hide_index=True)
+
+    flag_rows = [
+        {"flag": flag_name, "value": flag_value}
+        for flag_name, flag_value in dict(status["backend_flags"]).items()
+    ]
+    st.markdown("##### Backend flags")
+    st.dataframe(pd.DataFrame(flag_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("##### Read-only connection check")
+    if not url_present or not key_present:
+        st.warning("WARNING：Supabase secrets missing，未執行連線檢查。")
+        st.caption("此區塊只供管理員檢查，不會改變正式 backend，也不會寫入 Supabase。")
+        return
+
+    try:
+        counts = get_db_adapter("supabase").table_counts()
+        count_rows = [
+            {"table": table_name, "row_count": counts.get(table_name, 0)}
+            for table_name in ["people", "daily_logs", "meal_logs", "weekly_reports"]
+        ]
+        st.success("PASS：Supabase secrets present，read-only connection OK。")
+        st.dataframe(pd.DataFrame(count_rows), use_container_width=True, hide_index=True)
+    except Exception as exc:
+        st.error(f"FAIL：Supabase read-only connection failed：{readable_backend_error(exc)}")
+
+    st.caption("此 dry run 只讀取 Supabase counts，不會 insert / update / delete。")
+
+
 def admin_panel() -> str | None:
     st.sidebar.markdown("### 管理")
     mode = st.sidebar.radio(
@@ -3937,6 +3985,7 @@ def admin_panel() -> str | None:
         render_db_adapter_status_check()
         render_db_sync_status_check()
         render_backend_readonly_pilot()
+        render_streamlit_cloud_supabase_dry_run()
 
         st.markdown("#### 重設密碼")
         with st.form("admin_reset_password_form"):

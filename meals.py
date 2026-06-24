@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
-import os
 from datetime import date, datetime
 
 import pandas as pd
 
 from db import connect
+from runtime_config import get_backend_flag
 from write_adapter import SupabaseWriteAdapter
 
 
@@ -14,7 +14,7 @@ MEAL_LOG_WRITE_BACKEND_ENV = "PGY90_MEAL_LOG_WRITE_BACKEND"
 
 
 def _meal_write_backend() -> tuple[str, str | None]:
-    backend = os.environ.get(MEAL_LOG_WRITE_BACKEND_ENV, "sqlite").strip().lower() or "sqlite"
+    backend = get_backend_flag(MEAL_LOG_WRITE_BACKEND_ENV)
     if backend in {"sqlite", "supabase"}:
         return backend, None
     return "sqlite", f"{MEAL_LOG_WRITE_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
