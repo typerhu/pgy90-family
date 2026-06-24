@@ -65,7 +65,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-1911-R48"
+APP_VERSION = "Ver. PGY90-G1-260624-1951-R49"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -79,6 +79,7 @@ DAILY_LOG_WRITE_BACKEND_ENV = "PGY90_DAILY_LOG_WRITE_BACKEND"
 TREND_READ_BACKEND_ENV = "PGY90_TREND_READ_BACKEND"
 HOME_READ_BACKEND_ENV = "PGY90_HOME_READ_BACKEND"
 LOGIN_USER_LIST_BACKEND_ENV = "PGY90_LOGIN_USER_LIST_BACKEND"
+LOGIN_PASSWORD_BACKEND_ENV = "PGY90_LOGIN_PASSWORD_BACKEND"
 
 
 def get_local_today() -> date:
@@ -599,15 +600,72 @@ def login_user_options(
 
 
 def verify_account(person_name: str, password: str) -> bool:
+    return verify_login_password(person_name, password)
+
+
+def verify_sqlite_account(person_name: str, password: str) -> bool | None:
     with connect() as conn:
         row = conn.execute(
             "SELECT password_salt, password_hash FROM app_users WHERE person_name = ?",
             (person_name,),
         ).fetchone()
     if not row:
-        return False
+        return None
     _, digest = hash_password(password, row["password_salt"])
     return hmac.compare_digest(digest, row["password_hash"])
+
+
+def get_login_password_backend() -> tuple[str, str | None]:
+    backend = get_backend_flag(LOGIN_PASSWORD_BACKEND_ENV)
+    if backend in {"sqlite", "supabase_fallback", "supabase"}:
+        return backend, None
+    return "sqlite", f"{LOGIN_PASSWORD_BACKEND_ENV}={backend} 不支援，已改用 sqlite。"
+
+
+def supabase_app_user_password_record(person_name: str) -> dict | None:
+    rows = get_db_adapter("supabase").get_app_users(person_name)
+    for row in rows:
+        if str(row.get("person_name") or "") == person_name:
+            return row
+    return None
+
+
+def verify_supabase_account(person_name: str, password: str) -> bool | None:
+    row = supabase_app_user_password_record(person_name)
+    if not row:
+        return None
+    salt = row.get("password_salt")
+    stored_hash = row.get("password_hash")
+    if not salt or not stored_hash:
+        return None
+    _, digest = hash_password(password, str(salt))
+    return hmac.compare_digest(digest, str(stored_hash))
+
+
+def verify_login_password(person_name: str, password: str) -> bool:
+    backend, _ = get_login_password_backend()
+    if backend == "supabase":
+        try:
+            supabase_result = verify_supabase_account(person_name, password)
+            if supabase_result is not None:
+                return supabase_result
+        except Exception:
+            pass
+        sqlite_result = verify_sqlite_account(person_name, password)
+        return bool(sqlite_result)
+
+    sqlite_result = verify_sqlite_account(person_name, password)
+    if sqlite_result is not None:
+        return sqlite_result
+
+    if backend == "supabase_fallback":
+        try:
+            supabase_result = verify_supabase_account(person_name, password)
+            return bool(supabase_result)
+        except Exception:
+            return False
+
+    return False
 
 
 def require_login() -> str | None:
@@ -4049,6 +4107,36 @@ def render_streamlit_cloud_supabase_dry_run() -> None:
     if supabase_login_error:
         st.warning(f"Supabase login user preview failed：{supabase_login_error}")
     st.caption("此 preview 只讀 person_name，不讀取或顯示 password_hash / secrets。")
+
+    st.markdown("##### Login password verification source preview")
+    password_backend, password_backend_warning = get_login_password_backend()
+    sqlite_password_users = clean_login_usernames(registered_usernames())
+    supabase_password_users: list[str] = []
+    supabase_password_error = ""
+    if url_present and key_present:
+        try:
+            supabase_password_users = clean_login_usernames(
+                [
+                    str(row.get("person_name") or "")
+                    for row in get_db_adapter("supabase").get_app_users()
+                    if row.get("password_salt") and row.get("password_hash")
+                ]
+            )
+        except Exception as exc:
+            supabase_password_error = readable_backend_error(exc)
+
+    password_preview_rows = [
+        {"source": "backend flag", "count": "", "status": password_backend},
+        {"source": "sqlite app_users with password", "count": len(sqlite_password_users), "status": "available" if sqlite_password_users else "none"},
+        {"source": "supabase app_users with password", "count": len(supabase_password_users), "status": "available" if supabase_password_users else "none"},
+        {"source": "TYP password in Supabase", "count": "", "status": "yes" if "TYP" in supabase_password_users else "no"},
+    ]
+    st.dataframe(pd.DataFrame(password_preview_rows), use_container_width=True, hide_index=True)
+    if password_backend_warning:
+        st.warning(password_backend_warning)
+    if supabase_password_error:
+        st.warning(f"Supabase login password preview failed：{supabase_password_error}")
+    st.caption("此 preview 只顯示 password row 是否存在，不顯示 password_hash / password_salt。")
 
     st.markdown("##### Read-only connection check")
     if not url_present or not key_present:
