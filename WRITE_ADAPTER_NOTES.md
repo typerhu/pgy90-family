@@ -122,3 +122,11 @@ The following remain out of scope:
 - `coach_profiles` writes
 - auth / admin writes
 - Supabase schema changes
+
+### R44 Unicode Fix
+
+Meal log Supabase writes use the REST endpoint with explicit UTF-8 JSON body
+serialization. The request body is encoded with `ensure_ascii=False` and
+`utf-8`, while row targeting uses ASCII-safe `id` filters only. Chinese
+`meal_type` and `description` values stay in the JSON body and are not placed in
+headers or filter query values.

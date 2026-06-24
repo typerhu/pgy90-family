@@ -8,8 +8,12 @@ weekly_reports pilot path introduced after the isolated R41 test.
 from __future__ import annotations
 
 import os
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Protocol
 
 
@@ -131,6 +135,14 @@ def _blank_to_none(value: Any) -> Any:
     return value
 
 
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
 def _bool_or_none(value: Any) -> bool | None:
     if value is None or value == "":
         return None
@@ -149,7 +161,7 @@ def _bool_or_none(value: Any) -> bool | None:
 def build_daily_log_payload(values: dict[str, Any]) -> dict[str, Any]:
     now = datetime.now().isoformat(timespec="seconds")
     payload = {
-        key: _blank_to_none(value)
+        key: _blank_to_none(_json_safe_value(value))
         for key, value in dict(values).items()
         if key in DAILY_LOG_COLUMNS
     }
@@ -164,7 +176,7 @@ def build_daily_log_payload(values: dict[str, Any]) -> dict[str, Any]:
 
 def build_meal_log_payload(values: dict[str, Any]) -> dict[str, Any]:
     payload = {
-        key: _blank_to_none(value)
+        key: _blank_to_none(_json_safe_value(value))
         for key, value in dict(values).items()
         if key in MEAL_LOG_COLUMNS
     }
@@ -321,6 +333,48 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
             self._client = create_client(self.supabase_url, self.service_role_key)
         return self._client
 
+    def _postgrest_url(self, table_name: str, query: str = "") -> str:
+        if not self.supabase_url:
+            raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.")
+        base = self.supabase_url.rstrip("/")
+        url = f"{base}/rest/v1/{urllib.parse.quote(table_name, safe='')}"
+        if query:
+            url = f"{url}?{query}"
+        return url
+
+    def _postgrest_request(
+        self,
+        method: str,
+        table_name: str,
+        query: str = "",
+        body: Any | None = None,
+        prefer: str | None = None,
+    ) -> None:
+        if not self.service_role_key:
+            raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.")
+        headers = {
+            "apikey": self.service_role_key,
+            "Authorization": f"Bearer {self.service_role_key}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        if prefer:
+            headers["Prefer"] = prefer
+        data = None
+        if body is not None:
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            self._postgrest_url(table_name, query),
+            data=data,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20):
+                return
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Supabase REST {method} {table_name} failed: {exc.code} {detail}") from exc
+
     def save_weekly_report(
         self,
         person_name: str,
@@ -399,8 +453,13 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
                 payload=payload,
             )
 
-        client = self._get_client()
-        client.table("meal_logs").upsert(payload, on_conflict="id").execute()
+        self._postgrest_request(
+            "POST",
+            "meal_logs",
+            query="on_conflict=id",
+            body=[payload],
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
         return WriteResult(
             backend=self.backend_name,
             operation="save_meal_log",
@@ -425,8 +484,13 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
                 payload=payload,
             )
 
-        client = self._get_client()
-        client.table("meal_logs").upsert(payload, on_conflict="id").execute()
+        self._postgrest_request(
+            "POST",
+            "meal_logs",
+            query="on_conflict=id",
+            body=[payload],
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
         return WriteResult(
             backend=self.backend_name,
             operation="update_meal_log",
@@ -452,10 +516,13 @@ class SupabaseWriteAdapter(DryRunWriteAdapter):
                 message="Validated only. No data was deleted.",
             )
 
-        query = self._get_client().table("meal_logs").delete().eq("id", int(meal_id))
-        if person_name:
-            query = query.eq("person_name", person_name)
-        query.execute()
+        id_query = urllib.parse.urlencode({"id": f"eq.{int(meal_id)}"})
+        self._postgrest_request(
+            "DELETE",
+            "meal_logs",
+            query=id_query,
+            prefer="return=minimal",
+        )
         return WriteResult(
             backend=self.backend_name,
             operation="delete_meal_log",

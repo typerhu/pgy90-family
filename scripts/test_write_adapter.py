@@ -98,16 +98,43 @@ def main() -> int:
             "ignored_field": "not exported",
         }
     )
+    chinese_meal_payload = build_meal_log_payload(
+        {
+            "id": 12346,
+            "person_name": "TYP",
+            "log_date": "2026-06-24",
+            "meal_type": "午餐",
+            "description": "彩椒雞蛋番茄什錦",
+            "calories": 123,
+            "protein_g": 12.5,
+            "fiber_g": 3.0,
+            "carbs_g": 18.0,
+            "fat_g": 5.0,
+            "confidence": "中文 dry-run",
+            "created_at": "2026-06-24T08:10:00",
+        }
+    )
     print(f"- meal log payload fields: {sorted(meal_payload.keys())}")
+    print(f"- chinese meal log payload fields: {sorted(chinese_meal_payload.keys())}")
+    try:
+        import json
+
+        json.dumps(chinese_meal_payload, ensure_ascii=False).encode("utf-8")
+        print("- chinese meal log UTF-8 serialization: PASS")
+    except UnicodeError as exc:
+        print(f"ERROR: Chinese meal payload UTF-8 serialization failed: {exc}", file=sys.stderr)
+        return 1
     meal_save_result = supabase_adapter.save_meal_log(meal_payload)
     meal_update_result = supabase_adapter.update_meal_log(int(meal_payload["id"]), meal_payload)
     meal_delete_result = supabase_adapter.delete_meal_log(int(meal_payload["id"]), "TYP")
+    chinese_meal_result = supabase_adapter.save_meal_log(chinese_meal_payload)
     print(f"- supabase meal_logs save dry-run: {scrub_result(meal_save_result)}")
     print(f"- supabase meal_logs update dry-run: {scrub_result(meal_update_result)}")
     print(f"- supabase meal_logs delete dry-run: {scrub_result(meal_delete_result)}")
+    print(f"- supabase chinese meal_logs save dry-run: {scrub_result(chinese_meal_result)}")
     if not all(
         result.dry_run and result.would_write
-        for result in [meal_save_result, meal_update_result, meal_delete_result]
+        for result in [meal_save_result, meal_update_result, meal_delete_result, chinese_meal_result]
     ):
         print("ERROR: Supabase meal_logs adapter did not return dry-run results.", file=sys.stderr)
         return 1
