@@ -65,7 +65,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260624-2020-R50"
+APP_VERSION = "Ver. PGY90-G1-260624-2154-R51"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -3310,207 +3310,371 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
         st.info(item)
     show_latest_meal_ai_notes(person_name, selected_date)
 
-    st.markdown("#### 餐前分析")
-    pre_meal_result_key = f"pre_meal_analysis_result_{person_name}"
-    meal_text_input_key = f"meal_text_input_{person_name}"
-    pre_text_tab, pre_photo_tab = st.tabs(["文字分析", "圖片分析"])
+    st.markdown("#### 餐食輸入")
+    pre_meal_result_key = f"pre_meal_analysis_result_{person_name}_{selected_date.isoformat()}"
+    unified_draft_key = f"unified_meal_draft_{person_name}_{selected_date.isoformat()}"
+    unified_draft_version_key = f"unified_meal_draft_version_{person_name}_{selected_date.isoformat()}"
 
-    with pre_text_tab:
-        with st.form(f"pre_meal_text_form_{person_name}"):
-            pre_meal_text = st.text_area(
-                "還沒吃之前，先描述眼前選項",
-                placeholder="例：我現在有雞飯、生肉麵、經濟飯可以選，今天蛋白質還不夠，怎麼吃？",
-                height=100,
-                key=f"pre_meal_text_input_{person_name}",
-            )
-            analyze_pre_text = st.form_submit_button("分析怎麼吃", use_container_width=True)
+    def set_meal_draft(estimate: dict, source: str, can_save: bool = True) -> None:
+        st.session_state[unified_draft_key] = {
+            "meal_type": estimate.get("meal_type") or "點心",
+            "description": estimate.get("description") or "",
+            "calories": int(estimate.get("calories") or 0),
+            "protein_g": float(estimate.get("protein_g") or 0),
+            "fiber_g": float(estimate.get("fiber_g") or 0),
+            "carbs_g": float(estimate.get("carbs_g") or 0),
+            "fat_g": float(estimate.get("fat_g") or 0),
+            "confidence": estimate.get("confidence") or source,
+            "matched": estimate.get("matched") or source,
+            "source": source,
+            "ai_estimate": estimate,
+            "can_save": can_save,
+        }
+        st.session_state[unified_draft_version_key] = st.session_state.get(unified_draft_version_key, 0) + 1
 
-        if analyze_pre_text:
-            cleaned_pre_meal_text = pre_meal_text.strip()
-            if not cleaned_pre_meal_text:
-                st.warning("先輸入你現在看到或想吃的選項。")
-            elif not get_openai_api_key():
-                st.warning("尚未設定 OPENAI_API_KEY，無法使用餐前 AI 分析。")
-            else:
-                try:
-                    with st.spinner("正在分析這餐怎麼選..."):
-                        st.session_state[pre_meal_result_key] = analyze_pre_meal_text(
-                            cleaned_pre_meal_text,
-                            pre_meal_ai_context,
-                        )
-                except RuntimeError as error:
-                    st.error(str(error))
+    purpose = st.radio(
+        "這次要做什麼？",
+        ["餐後記錄：已經吃了，要記錄到 meal_logs", "餐前分析：還沒吃，先分析怎麼吃"],
+        horizontal=False,
+        key=f"meal_input_purpose_{person_name}",
+    )
+    is_post_meal = purpose.startswith("餐後記錄")
+    input_method = st.radio(
+        "輸入方式",
+        ["文字描述", "上傳 / 拍照", "手動輸入營養數據"],
+        horizontal=True,
+        key=f"meal_input_method_{person_name}",
+    )
 
-    with pre_photo_tab:
-        pre_meal_photo = st.file_uploader(
-            "上傳菜單、餐檯或食物選項照片",
-            type=["jpg", "jpeg", "png", "webp"],
-            key=f"pre_meal_photo_{person_name}",
-        )
-        pre_meal_photo_note = st.text_area(
-            "補充說明",
-            placeholder="例：我想從這幾樣裡選晚餐，今天熱量剩不多。",
-            height=80,
-            key=f"pre_meal_photo_note_{person_name}",
-        )
-        if st.button("分析照片怎麼吃", use_container_width=True, key=f"pre_meal_photo_button_{person_name}"):
-            if pre_meal_photo is None:
-                st.warning("先上傳一張菜單、餐檯或食物選項照片。")
-            elif not get_openai_api_key():
-                st.warning("尚未設定 OPENAI_API_KEY，無法使用餐前圖片分析。")
-            elif pre_meal_photo.size > PRE_MEAL_IMAGE_MAX_MB * 1024 * 1024:
-                st.warning(
-                    f"這張圖片超過 {PRE_MEAL_IMAGE_MAX_MB} MB，請先裁切或壓縮後再上傳，"
-                    "或改用文字描述餐點選項。"
+    if is_post_meal:
+        if input_method == "文字描述":
+            with st.form(f"unified_post_text_form_{person_name}"):
+                text = st.text_area(
+                    "描述剛吃的內容",
+                    placeholder="例：午餐吃海南雞飯加一顆蛋，喝無糖拿鐵",
+                    height=110,
+                    key=f"unified_post_text_{person_name}",
                 )
-            else:
-                try:
-                    with st.spinner("正在分析照片裡的選項..."):
-                        st.session_state[pre_meal_result_key] = analyze_pre_meal_photo(
-                            pre_meal_photo.getvalue(),
-                            pre_meal_photo.type or "image/jpeg",
-                            pre_meal_ai_context,
-                            pre_meal_photo_note.strip()
-                            or "請根據照片中的菜單、餐檯或食物選項提供餐前建議。",
+                meal_type_override = st.selectbox("餐別", ["自動判斷", *MEAL_TYPES])
+                submitted = st.form_submit_button("AI 估算並建立草稿", use_container_width=True)
+
+            if submitted:
+                cleaned = text.strip()
+                if not cleaned:
+                    st.warning("先輸入一段飲食內容。")
+                else:
+                    try:
+                        if get_openai_api_key():
+                            with st.spinner("正在用 AI 估算文字餐食..."):
+                                estimate = analyze_meal_text_with_context(cleaned, meal_type_override, meal_ai_context)
+                        else:
+                            raise RuntimeError("尚未設定 OPENAI_API_KEY。")
+                    except (RuntimeError, json.JSONDecodeError) as error:
+                        estimate = estimate_nutrition(cleaned)
+                        estimate["description"] = cleaned
+                        estimate["meal_type"] = (
+                            detect_meal_type(cleaned)
+                            if meal_type_override == "自動判斷"
+                            else meal_type_override
                         )
-                except RuntimeError as error:
-                    st.error(str(error))
+                        st.warning(f"AI 估算未使用，已改用本機規則估算。原因：{error}")
+                    set_meal_draft(estimate, "AI 文字估算")
+                    st.success("已建立餐後記錄草稿，請確認或修改後保存。")
 
-    if st.session_state.get(pre_meal_result_key):
-        st.markdown("#### 餐前分析結果")
-        st.markdown(st.session_state[pre_meal_result_key])
-        if st.button("轉入餐後紀錄草稿", use_container_width=True, key=f"pre_meal_to_post_draft_{person_name}"):
-            st.session_state[meal_text_input_key] = extract_post_meal_draft_from_pre_meal_analysis(
-                st.session_state[pre_meal_result_key]
+        elif input_method == "上傳 / 拍照":
+            photo_source = st.radio(
+                "照片來源",
+                ["上傳照片", "拍照"],
+                horizontal=True,
+                key=f"unified_photo_source_{person_name}",
             )
-            st.success("已轉入餐後輸入框，請確認實際吃的內容後再估算加入紀錄。")
-
-    text_tab, photo_tab = st.tabs(["文字輸入", "照片輸入"])
-
-    with text_tab:
-        with st.form("chat_food_form"):
-            text = st.text_area(
-                "用一句話記錄飲食",
-                placeholder="例：午餐吃海南雞飯加一顆蛋，喝無糖拿鐵",
-                height=110,
-                key=meal_text_input_key,
-            )
-            meal_type_override = st.selectbox("餐別", ["自動判斷", "早餐", "午餐", "晚餐", "點心"])
-            submitted = st.form_submit_button("估算並加入今日紀錄", use_container_width=True)
-
-        if submitted:
-            cleaned = text.strip()
-            if not cleaned:
-                st.warning("先輸入一段飲食內容。")
+            captured_photo = None
+            uploaded_photo = None
+            if photo_source == "上傳照片":
+                uploaded_photo = st.file_uploader(
+                    "上傳餐食照片",
+                    type=["jpg", "jpeg", "png", "webp"],
+                    key=f"unified_meal_photo_upload_{person_name}",
+                )
+                st.session_state["meal_camera_enabled"] = False
             else:
-                used_ai_estimate = False
-                try:
-                    if get_openai_api_key():
-                        with st.spinner("正在用 AI 估算文字餐食..."):
-                            estimate = analyze_meal_text_with_context(cleaned, meal_type_override, meal_ai_context)
-                        used_ai_estimate = True
-                    else:
-                        raise RuntimeError("尚未設定 OPENAI_API_KEY。")
-                except (RuntimeError, json.JSONDecodeError) as error:
-                    estimate = estimate_nutrition(cleaned)
-                    estimate["description"] = cleaned
-                    estimate["meal_type"] = (
-                        detect_meal_type(cleaned)
-                        if meal_type_override == "自動判斷"
-                        else meal_type_override
+                if not st.session_state.get("meal_camera_enabled"):
+                    if st.button("啟用相機", use_container_width=True, key=f"unified_enable_camera_{person_name}"):
+                        st.session_state["meal_camera_enabled"] = True
+                        st.rerun()
+                if st.session_state.get("meal_camera_enabled"):
+                    captured_photo = st.camera_input("拍一張餐食照片", key=f"unified_camera_{person_name}")
+
+            photo_meal_type = st.selectbox(
+                "餐別",
+                ["自動判斷", *MEAL_TYPES],
+                key=f"unified_photo_meal_type_{person_name}",
+            )
+            photo_file = captured_photo or uploaded_photo
+            if st.button("AI 辨識照片並建立草稿", use_container_width=True, key=f"unified_photo_estimate_{person_name}"):
+                if photo_file is None:
+                    st.warning("先拍照或上傳一張餐食照片。")
+                elif not get_openai_api_key():
+                    st.warning("尚未設定 OPENAI_API_KEY，請先在 Streamlit Secrets 加入 OpenAI API key。")
+                else:
+                    try:
+                        with st.spinner("正在辨識餐食照片..."):
+                            estimate = analyze_meal_photo_with_context(
+                                photo_file.getvalue(),
+                                photo_file.type or "image/jpeg",
+                                photo_meal_type,
+                                meal_ai_context,
+                            )
+                        set_meal_draft(estimate, "AI 照片估算")
+                        st.success("已建立餐後記錄草稿，請確認或修改後保存。")
+                    except json.JSONDecodeError:
+                        st.error("照片辨識回傳格式不完整，請換一張更清楚的照片或改用文字描述。")
+                    except RuntimeError as error:
+                        st.error(str(error))
+
+        else:
+            with st.form(f"unified_manual_form_{person_name}"):
+                manual_meal_type = st.selectbox("餐別", MEAL_TYPES, key=f"manual_meal_type_{person_name}")
+                manual_description = st.text_area(
+                    "內容",
+                    placeholder="例：雞胸便當、無糖拿鐵",
+                    height=90,
+                    key=f"manual_description_{person_name}",
+                )
+                manual_calories = st.number_input("熱量 kcal", min_value=0, max_value=5000, value=0, step=10, key=f"manual_calories_{person_name}")
+                manual_protein = st.number_input("蛋白質 g", min_value=0.0, max_value=300.0, value=0.0, step=0.5, key=f"manual_protein_{person_name}")
+                manual_fiber = st.number_input("纖維 g", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key=f"manual_fiber_{person_name}")
+                manual_carbs = st.number_input("碳水 g", min_value=0.0, max_value=500.0, value=0.0, step=0.5, key=f"manual_carbs_{person_name}")
+                manual_fat = st.number_input("脂肪 g", min_value=0.0, max_value=300.0, value=0.0, step=0.5, key=f"manual_fat_{person_name}")
+                manual_submitted = st.form_submit_button("建立手動草稿", use_container_width=True)
+
+            if manual_submitted:
+                cleaned_description = manual_description.strip()
+                if not cleaned_description:
+                    st.warning("請輸入餐食內容。")
+                else:
+                    set_meal_draft(
+                        {
+                            "meal_type": manual_meal_type,
+                            "description": cleaned_description,
+                            "calories": manual_calories,
+                            "protein_g": manual_protein,
+                            "fiber_g": manual_fiber,
+                            "carbs_g": manual_carbs,
+                            "fat_g": manual_fat,
+                            "confidence": "手動",
+                            "matched": "手動輸入營養數據",
+                        },
+                        "手動輸入",
                     )
-                    st.warning(f"AI 估算未使用，已改用本機規則估算。原因：{error}")
+                    st.success("已建立手動餐後記錄草稿，請確認後保存。")
+
+    else:
+        if input_method == "文字描述":
+            with st.form(f"unified_pre_text_form_{person_name}"):
+                pre_meal_text = st.text_area(
+                    "還沒吃之前，先描述眼前選項",
+                    placeholder="例：我現在有雞飯、生肉麵、經濟飯可以選，今天蛋白質還不夠，怎麼吃？",
+                    height=100,
+                    key=f"unified_pre_text_{person_name}",
+                )
+                analyze_pre_text = st.form_submit_button("分析怎麼吃", use_container_width=True)
+
+            if analyze_pre_text:
+                cleaned_pre_meal_text = pre_meal_text.strip()
+                if not cleaned_pre_meal_text:
+                    st.warning("先輸入你現在看到或想吃的選項。")
+                elif not get_openai_api_key():
+                    st.warning("尚未設定 OPENAI_API_KEY，無法使用餐前 AI 分析。")
+                else:
+                    try:
+                        with st.spinner("正在分析這餐怎麼選..."):
+                            st.session_state[pre_meal_result_key] = analyze_pre_meal_text(
+                                cleaned_pre_meal_text,
+                                pre_meal_ai_context,
+                            )
+                    except RuntimeError as error:
+                        st.error(str(error))
+
+        elif input_method == "上傳 / 拍照":
+            pre_photo_source = st.radio(
+                "照片來源",
+                ["上傳照片", "拍照"],
+                horizontal=True,
+                key=f"unified_pre_photo_source_{person_name}",
+            )
+            pre_captured_photo = None
+            pre_uploaded_photo = None
+            if pre_photo_source == "上傳照片":
+                pre_uploaded_photo = st.file_uploader(
+                    "上傳菜單、餐檯或食物選項照片",
+                    type=["jpg", "jpeg", "png", "webp"],
+                    key=f"unified_pre_photo_upload_{person_name}",
+                )
+                st.session_state["pre_meal_camera_enabled"] = False
+            else:
+                if not st.session_state.get("pre_meal_camera_enabled"):
+                    if st.button("啟用相機", use_container_width=True, key=f"unified_pre_enable_camera_{person_name}"):
+                        st.session_state["pre_meal_camera_enabled"] = True
+                        st.rerun()
+                if st.session_state.get("pre_meal_camera_enabled"):
+                    pre_captured_photo = st.camera_input("拍一張選項照片", key=f"unified_pre_camera_{person_name}")
+
+            pre_meal_photo_note = st.text_area(
+                "補充說明",
+                placeholder="例：我想從這幾樣裡選晚餐，今天熱量剩不多。",
+                height=80,
+                key=f"unified_pre_photo_note_{person_name}",
+            )
+            pre_photo_file = pre_captured_photo or pre_uploaded_photo
+            if st.button("分析照片怎麼吃", use_container_width=True, key=f"unified_pre_photo_button_{person_name}"):
+                if pre_photo_file is None:
+                    st.warning("先上傳或拍一張菜單、餐檯或食物選項照片。")
+                elif not get_openai_api_key():
+                    st.warning("尚未設定 OPENAI_API_KEY，無法使用餐前圖片分析。")
+                elif pre_photo_file.size > PRE_MEAL_IMAGE_MAX_MB * 1024 * 1024:
+                    st.warning(
+                        f"這張圖片超過 {PRE_MEAL_IMAGE_MAX_MB} MB，請先裁切或壓縮後再上傳，"
+                        "或改用文字描述餐點選項。"
+                    )
+                else:
+                    try:
+                        with st.spinner("正在分析照片裡的選項..."):
+                            st.session_state[pre_meal_result_key] = analyze_pre_meal_photo(
+                                pre_photo_file.getvalue(),
+                                pre_photo_file.type or "image/jpeg",
+                                pre_meal_ai_context,
+                                pre_meal_photo_note.strip()
+                                or "請根據照片中的菜單、餐檯或食物選項提供餐前建議。",
+                            )
+                    except RuntimeError as error:
+                        st.error(str(error))
+
+        else:
+            with st.form(f"unified_pre_manual_form_{person_name}"):
+                pre_manual_description = st.text_area(
+                    "想評估的餐點或營養數據",
+                    placeholder="例：這餐大約 780 kcal，蛋白質 35g，脂肪可能偏高。",
+                    height=90,
+                    key=f"pre_manual_description_{person_name}",
+                )
+                pre_manual_calories = st.number_input("熱量 kcal", min_value=0, max_value=5000, value=0, step=10, key=f"pre_manual_calories_{person_name}")
+                pre_manual_protein = st.number_input("蛋白質 g", min_value=0.0, max_value=300.0, value=0.0, step=0.5, key=f"pre_manual_protein_{person_name}")
+                pre_manual_fiber = st.number_input("纖維 g", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key=f"pre_manual_fiber_{person_name}")
+                pre_manual_carbs = st.number_input("碳水 g", min_value=0.0, max_value=500.0, value=0.0, step=0.5, key=f"pre_manual_carbs_{person_name}")
+                pre_manual_fat = st.number_input("脂肪 g", min_value=0.0, max_value=300.0, value=0.0, step=0.5, key=f"pre_manual_fat_{person_name}")
+                pre_manual_submitted = st.form_submit_button("建立餐前參考", use_container_width=True)
+
+            if pre_manual_submitted:
+                st.session_state[pre_meal_result_key] = (
+                    "這是餐前營養參考，尚未保存到餐食紀錄。\n\n"
+                    f"- 描述：{pre_manual_description.strip() or '未填'}\n"
+                    f"- 熱量：約 {pre_manual_calories} kcal\n"
+                    f"- 蛋白質：約 {pre_manual_protein:.1f} g\n"
+                    f"- 纖維：約 {pre_manual_fiber:.1f} g\n"
+                    f"- 碳水：約 {pre_manual_carbs:.1f} g\n"
+                    f"- 脂肪：約 {pre_manual_fat:.1f} g\n\n"
+                    "如果實際吃了，可以轉成餐後記錄草稿後再保存。"
+                )
+                set_meal_draft(
+                    {
+                        "meal_type": detect_meal_type(pre_manual_description),
+                        "description": pre_manual_description.strip() or "餐前手動營養參考",
+                        "calories": pre_manual_calories,
+                        "protein_g": pre_manual_protein,
+                        "fiber_g": pre_manual_fiber,
+                        "carbs_g": pre_manual_carbs,
+                        "fat_g": pre_manual_fat,
+                        "confidence": "餐前手動參考",
+                        "matched": "餐前手動營養參考",
+                    },
+                    "餐前手動參考",
+                    can_save=False,
+                )
+
+        if st.session_state.get(pre_meal_result_key):
+            st.markdown("##### 餐前分析結果")
+            st.markdown(st.session_state[pre_meal_result_key])
+            if st.button("轉為餐後記錄草稿", use_container_width=True, key=f"unified_pre_to_post_draft_{person_name}"):
+                draft_text = extract_post_meal_draft_from_pre_meal_analysis(st.session_state[pre_meal_result_key])
+                estimate = estimate_nutrition(draft_text)
+                estimate["description"] = draft_text
+                estimate["meal_type"] = detect_meal_type(draft_text)
+                estimate["confidence"] = "餐前轉入"
+                set_meal_draft(estimate, "餐前分析轉入")
+                st.success("已轉為餐後記錄草稿，請依實際吃的內容確認後保存。")
+
+    draft = st.session_state.get(unified_draft_key)
+    if draft:
+        st.markdown("##### 確認 / 修改餐後記錄")
+        if not draft.get("can_save", True):
+            st.info("目前是餐前參考草稿，不會自動保存。若實際吃了，請先按「轉為餐後記錄草稿」。")
+        suffix = st.session_state.get(unified_draft_version_key, 0)
+        default_meal_type = draft["meal_type"] if draft["meal_type"] in MEAL_TYPES else "點心"
+        with st.form(f"unified_confirm_meal_form_{person_name}_{suffix}"):
+            confirmed_meal_type = st.selectbox(
+                "餐別",
+                MEAL_TYPES,
+                index=MEAL_TYPES.index(default_meal_type),
+                key=f"confirm_meal_type_{person_name}_{suffix}",
+            )
+            confirmed_description = st.text_area(
+                "描述",
+                value=draft["description"],
+                height=90,
+                key=f"confirm_description_{person_name}_{suffix}",
+            )
+            confirmed_calories = st.number_input("熱量 kcal", min_value=0, max_value=5000, value=int(draft["calories"]), step=10, key=f"confirm_calories_{person_name}_{suffix}")
+            confirmed_protein = st.number_input("蛋白質 g", min_value=0.0, max_value=300.0, value=float(draft["protein_g"]), step=0.5, key=f"confirm_protein_{person_name}_{suffix}")
+            confirmed_fiber = st.number_input("纖維 g", min_value=0.0, max_value=100.0, value=float(draft["fiber_g"]), step=0.5, key=f"confirm_fiber_{person_name}_{suffix}")
+            confirmed_carbs = st.number_input("碳水 g", min_value=0.0, max_value=500.0, value=float(draft["carbs_g"]), step=0.5, key=f"confirm_carbs_{person_name}_{suffix}")
+            confirmed_fat = st.number_input("脂肪 g", min_value=0.0, max_value=300.0, value=float(draft["fat_g"]), step=0.5, key=f"confirm_fat_{person_name}_{suffix}")
+            save_draft = st.form_submit_button(
+                "保存到今日餐食",
+                use_container_width=True,
+                disabled=not draft.get("can_save", True),
+            )
+
+        if save_draft:
+            cleaned_description = confirmed_description.strip()
+            if not cleaned_description:
+                st.warning("餐食描述不能空白。")
+            else:
+                estimate_for_notes = dict(draft.get("ai_estimate") or {})
                 meal_write_backend, meal_write_warning = save_meal_log(
                     {
                         "person_name": person_name,
                         "log_date": selected_date.isoformat(),
-                        "meal_type": estimate["meal_type"],
-                        "description": estimate["description"],
-                        "calories": estimate["calories"],
-                        "protein_g": estimate["protein_g"],
-                        "fiber_g": estimate["fiber_g"],
-                        "carbs_g": estimate["carbs_g"],
-                        "fat_g": estimate["fat_g"],
-                        "confidence": estimate["confidence"],
+                        "meal_type": confirmed_meal_type,
+                        "description": cleaned_description,
+                        "calories": confirmed_calories,
+                        "protein_g": confirmed_protein,
+                        "fiber_g": confirmed_fiber,
+                        "carbs_g": confirmed_carbs,
+                        "fat_g": confirmed_fat,
+                        "confidence": draft.get("confidence") or "手動確認",
                     }
                 )
                 st.session_state[meal_write_status_key] = {
                     "backend": meal_write_backend,
                     "warning": meal_write_warning,
                 }
-                st.success(
-                    "已加入："
-                    f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
-                    f"纖維 {estimate['fiber_g']} g。"
-                    f"{'AI ' if used_ai_estimate else ''}辨識：{estimate['matched']}。"
-                )
-                remember_meal_ai_notes(person_name, selected_date, estimate)
-                st.rerun()
-
-    with photo_tab:
-        photo_source = st.radio("照片來源", ["上傳照片", "拍照"], horizontal=True)
-        captured_photo = None
-        uploaded_photo = None
-        if photo_source == "上傳照片":
-            uploaded_photo = st.file_uploader("上傳餐食照片", type=["jpg", "jpeg", "png", "webp"])
-            st.session_state["meal_camera_enabled"] = False
-        else:
-            if not st.session_state.get("meal_camera_enabled"):
-                if st.button("啟用相機", use_container_width=True):
-                    st.session_state["meal_camera_enabled"] = True
-                    st.rerun()
-            if st.session_state.get("meal_camera_enabled"):
-                captured_photo = st.camera_input("拍一張餐食照片")
-
-        photo_meal_type = st.selectbox(
-            "餐別",
-            ["自動判斷", "早餐", "午餐", "晚餐", "點心"],
-            key="photo_meal_type",
-        )
-        photo_file = captured_photo or uploaded_photo
-        if st.button("辨識並加入今日紀錄", use_container_width=True):
-            if photo_file is None:
-                st.warning("先拍照或上傳一張餐食照片。")
-            elif not get_openai_api_key():
-                st.warning("尚未設定 OPENAI_API_KEY，請先在 Streamlit Secrets 加入 OpenAI API key。")
-            else:
-                try:
-                    with st.spinner("正在辨識餐食照片..."):
-                        estimate = analyze_meal_photo_with_context(
-                            photo_file.getvalue(),
-                            photo_file.type or "image/jpeg",
-                            photo_meal_type,
-                            meal_ai_context,
-                        )
-                    meal_write_backend, meal_write_warning = save_meal_log(
+                if estimate_for_notes:
+                    estimate_for_notes.update(
                         {
-                            "person_name": person_name,
-                            "log_date": selected_date.isoformat(),
-                            "meal_type": estimate["meal_type"],
-                            "description": estimate["description"],
-                            "calories": estimate["calories"],
-                            "protein_g": estimate["protein_g"],
-                            "fiber_g": estimate["fiber_g"],
-                            "carbs_g": estimate["carbs_g"],
-                            "fat_g": estimate["fat_g"],
-                            "confidence": estimate["confidence"],
+                            "description": cleaned_description,
+                            "meal_type": confirmed_meal_type,
+                            "calories": confirmed_calories,
+                            "protein_g": confirmed_protein,
+                            "fiber_g": confirmed_fiber,
+                            "carbs_g": confirmed_carbs,
+                            "fat_g": confirmed_fat,
                         }
                     )
-                    st.session_state[meal_write_status_key] = {
-                        "backend": meal_write_backend,
-                        "warning": meal_write_warning,
-                    }
-                    st.success(
-                        "已加入："
-                        f"{estimate['calories']} kcal，蛋白質 {estimate['protein_g']} g，"
-                        f"纖維 {estimate['fiber_g']} g。辨識：{estimate['matched']}。"
-                    )
-                    remember_meal_ai_notes(person_name, selected_date, estimate)
-                    st.rerun()
-                except json.JSONDecodeError:
-                    st.error("照片辨識回傳格式不完整，請換一張更清楚的照片或改用文字輸入。")
-                except RuntimeError as error:
-                    st.error(str(error))
+                    remember_meal_ai_notes(person_name, selected_date, estimate_for_notes)
+                st.session_state.pop(unified_draft_key, None)
+                st.success("已保存到今日餐食。")
+                st.rerun()
 
     st.markdown("#### 今日餐食")
     if meals.empty:
