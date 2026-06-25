@@ -68,7 +68,7 @@ analyze_pre_meal_text = getattr(
 )
 
 DEFAULT_PERSON = "我"
-APP_VERSION = "Ver. PGY90-G1-260625-0740-R55"
+APP_VERSION = "Ver. PGY90-G1-260625-1235-R56"
 APP_TIMEZONE = ZoneInfo("Asia/Kuala_Lumpur")
 UTC_TIMEZONE = ZoneInfo("UTC")
 REMEMBER_COOKIE_NAME = "pgy90_family_remember"
@@ -3657,7 +3657,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                 manual_fiber = st.number_input("纖維 g", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key=f"manual_fiber_{person_name}")
                 manual_carbs = st.number_input("碳水 g", min_value=0.0, max_value=500.0, value=0.0, step=0.5, key=f"manual_carbs_{person_name}")
                 manual_fat = st.number_input("脂肪 g", min_value=0.0, max_value=300.0, value=0.0, step=0.5, key=f"manual_fat_{person_name}")
-                manual_submitted = st.form_submit_button("估算這餐", use_container_width=True)
+                manual_submitted = st.form_submit_button("建立餐食資料", use_container_width=True)
 
             if manual_submitted:
                 cleaned_description = manual_description.strip()
@@ -3678,7 +3678,7 @@ def coach_page(df: pd.DataFrame, person_name: str) -> None:
                         },
                         "手動輸入",
                     )
-                    st.success("已估算完成，請確認後儲存。")
+                    st.success("已建立餐食資料，請確認後儲存。")
 
     else:
         if input_method == "文字描述":
